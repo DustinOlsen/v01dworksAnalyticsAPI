@@ -13,8 +13,12 @@ class VisitData(BaseModel):
 @router.post("/track")
 def track_visit(request: Request, data: Optional[VisitData] = None):
     # Get client IP. 
-    # Note: If behind a proxy (like Nginx/Cloudflare), you might need request.headers.get("x-forwarded-for")
-    client_ip = request.client.host
+    # Check X-Forwarded-For first (for proxies/load balancers)
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        client_ip = forwarded.split(",")[0].strip()
+    else:
+        client_ip = request.client.host
     
     hashed_ip = hash_ip(client_ip)
     country = get_country_from_ip(client_ip)

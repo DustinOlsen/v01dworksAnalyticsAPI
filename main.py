@@ -22,6 +22,10 @@ def on_startup():
 def read_root():
     return {"message": "Privacy Visitor Tracker API is running"}
 
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    return 204
+
 app.include_router(router)
 
 if __name__ == "__main__":
