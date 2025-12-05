@@ -81,6 +81,12 @@ def init_db(site_id: str = "default"):
         )
     """)
     cursor.execute("""
+        CREATE TABLE IF NOT EXISTS link_stats (
+            link_url TEXT PRIMARY KEY,
+            click_count INTEGER DEFAULT 0
+        )
+    """)
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS general_stats (
             key TEXT PRIMARY KEY,
             value INTEGER DEFAULT 0

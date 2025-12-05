@@ -12,6 +12,27 @@ class VisitData(BaseModel):
     path: str = "/"
     site_id: str = "default"
 
+class ClickData(BaseModel):
+    url: str
+    site_id: str = "default"
+
+@router.post("/click")
+def track_click(request: Request, data: ClickData):
+    conn = get_db(data.site_id)
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        INSERT INTO link_stats (link_url, click_count) 
+        VALUES (?, 1) 
+        ON CONFLICT(link_url) 
+        DO UPDATE SET click_count = click_count + 1
+    """, (data.url,))
+    
+    conn.commit()
+    conn.close()
+    
+    return {"status": "ok", "url": data.url}
+
 @router.post("/track")
 def track_visit(request: Request, data: Optional[VisitData] = None):
     # Get client IP. 
@@ -169,6 +190,9 @@ def get_stats(site_id: str = "default"):
     cursor.execute("SELECT * FROM referrer_stats ORDER BY count DESC")
     referrers = {row["category"]: row["count"] for row in cursor.fetchall()}
     
+    cursor.execute("SELECT * FROM link_stats ORDER BY click_count DESC")
+    links = {row["link_url"]: row["click_count"] for row in cursor.fetchall()}
+    
     # Get last 30 days of history
     cursor.execute("SELECT * FROM daily_stats ORDER BY date DESC LIMIT 30")
     history = [dict(row) for row in cursor.fetchall()]
@@ -184,5 +208,6 @@ def get_stats(site_id: str = "default"):
         "devices": devices,
         "browsers": browsers,
         "os": os_stats,
-        "referrers": referrers
+        "referrers": referrers,
+        "links": links
     }
