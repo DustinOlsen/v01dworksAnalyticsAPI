@@ -1,6 +1,7 @@
 import hashlib
 import os
 from pathlib import Path
+from urllib.parse import urlparse
 import geoip2.database
 from user_agents import parse
 
@@ -84,3 +85,32 @@ def parse_user_agent_info(ua_string: str):
         "browser": browser,
         "os": os_family
     }
+
+def parse_referrer_category(referrer_url: str) -> str:
+    """
+    Categorizes the referrer URL into 'Direct', 'Search Engine', 'Social Media', or 'Other'.
+    """
+    if not referrer_url:
+        return "Direct"
+    
+    try:
+        parsed = urlparse(referrer_url)
+        hostname = parsed.netloc.lower()
+        
+        # Common Search Engines
+        search_engines = [
+            "google.", "bing.", "yahoo.", "duckduckgo.", "baidu.", "yandex.", "ask.com", "aol.com", "ecosia.org"
+        ]
+        if any(se in hostname for se in search_engines):
+            return "Search Engine"
+            
+        # Common Social Media
+        social_media = [
+            "facebook.", "twitter.", "t.co", "instagram.", "linkedin.", "pinterest.", "reddit.", "tiktok.", "youtube.", "whatsapp."
+        ]
+        if any(sm in hostname for sm in social_media):
+            return "Social Media"
+            
+        return "Other"
+    except:
+        return "Unknown"

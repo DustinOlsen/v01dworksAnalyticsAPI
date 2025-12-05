@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
 from typing import Optional
+from datetime import datetime
 from .database import get_db
-from .utils import hash_ip, get_country_from_ip, parse_user_agent_info
+from .utils import hash_ip, get_country_from_ip, parse_user_agent_info, parse_referrer_category
 import sqlite3
 
 router = APIRouter()
@@ -28,21 +29,49 @@ def track_visit(request: Request, data: Optional[VisitData] = None):
     user_agent = request.headers.get("user-agent", "")
     ua_info = parse_user_agent_info(user_agent)
     
+    # Parse Referrer
+    referrer = request.headers.get("referer")
+    referrer_category = parse_referrer_category(referrer)
+    
     conn = get_db()
     cursor = conn.cursor()
     
     # 1. Update Total Visits
     cursor.execute("UPDATE general_stats SET value = value + 1 WHERE key = 'total_visits'")
     
-    # 2. Update Unique Visitors
-    # Try to insert. If exists, it's not unique.
-    is_unique = False
-    try:
+    # 2. Update Unique Visitors & Daily Stats
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    
+    # Check if IP has visited before to determine uniqueness
+    cursor.execute("SELECT last_seen FROM unique_visitors WHERE ip_hash = ?", (hashed_ip,))
+    row = cursor.fetchone()
+    
+    is_unique_ever = False
+    is_unique_today = False
+    
+    if row is None:
+        # Never seen before
+        is_unique_ever = True
+        is_unique_today = True
         cursor.execute("INSERT INTO unique_visitors (ip_hash) VALUES (?)", (hashed_ip,))
-        is_unique = True
-    except sqlite3.IntegrityError:
-        # Already visited, update last seen
+    else:
+        # Seen before, check if it was today (UTC)
+        last_seen_str = row["last_seen"] # Format: YYYY-MM-DD HH:MM:SS
+        if not last_seen_str.startswith(today):
+            is_unique_today = True
+        
+        # Update last seen
         cursor.execute("UPDATE unique_visitors SET last_seen = CURRENT_TIMESTAMP WHERE ip_hash = ?", (hashed_ip,))
+
+    # Update Daily Stats
+    cursor.execute("""
+        INSERT INTO daily_stats (date, total_visits, unique_visitors) 
+        VALUES (?, 1, ?) 
+        ON CONFLICT(date) 
+        DO UPDATE SET 
+            total_visits = total_visits + 1,
+            unique_visitors = unique_visitors + ?
+    """, (today, 1 if is_unique_today else 0, 1 if is_unique_today else 0))
         
     # 3. Update Country Stats
     # We count every visit for country stats to see traffic volume by region
@@ -84,6 +113,14 @@ def track_visit(request: Request, data: Optional[VisitData] = None):
         ON CONFLICT(os_family) 
         DO UPDATE SET count = count + 1
     """, (ua_info["os"],))
+
+    # 8. Update Referrer Stats
+    cursor.execute("""
+        INSERT INTO referrer_stats (category, count) 
+        VALUES (?, 1) 
+        ON CONFLICT(category) 
+        DO UPDATE SET count = count + 1
+    """, (referrer_category,))
     
     conn.commit()
     conn.close()
@@ -91,9 +128,11 @@ def track_visit(request: Request, data: Optional[VisitData] = None):
     return {
         "status": "ok", 
         "country": country, 
-        "unique": is_unique, 
+        "unique": is_unique_ever, 
+        "unique_today": is_unique_today,
         "page": page_path,
-        "ua_info": ua_info
+        "ua_info": ua_info,
+        "referrer": referrer_category
     }
 
 @router.get("/stats")
@@ -125,14 +164,23 @@ def get_stats():
     cursor.execute("SELECT * FROM os_stats ORDER BY count DESC")
     os_stats = {row["os_family"]: row["count"] for row in cursor.fetchall()}
     
+    cursor.execute("SELECT * FROM referrer_stats ORDER BY count DESC")
+    referrers = {row["category"]: row["count"] for row in cursor.fetchall()}
+    
+    # Get last 30 days of history
+    cursor.execute("SELECT * FROM daily_stats ORDER BY date DESC LIMIT 30")
+    history = [dict(row) for row in cursor.fetchall()]
+    
     conn.close()
     
     return {
         "total_visits": total_visits,
         "unique_visitors": unique_visitors,
+        "history": history,
         "countries": countries,
         "pages": pages,
         "devices": devices,
         "browsers": browsers,
-        "os": os_stats
+        "os": os_stats,
+        "referrers": referrers
     }
