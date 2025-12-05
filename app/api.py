@@ -2,7 +2,7 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel
 from typing import Optional
 from .database import get_db
-from .utils import hash_ip, get_country_from_ip
+from .utils import hash_ip, get_country_from_ip, parse_user_agent_info
 import sqlite3
 
 router = APIRouter()
@@ -23,6 +23,10 @@ def track_visit(request: Request, data: Optional[VisitData] = None):
     hashed_ip = hash_ip(client_ip)
     country = get_country_from_ip(client_ip)
     page_path = data.path if data and data.path else "/"
+    
+    # Parse User-Agent
+    user_agent = request.headers.get("user-agent", "")
+    ua_info = parse_user_agent_info(user_agent)
     
     conn = get_db()
     cursor = conn.cursor()
@@ -57,10 +61,40 @@ def track_visit(request: Request, data: Optional[VisitData] = None):
         DO UPDATE SET view_count = view_count + 1
     """, (page_path,))
     
+    # 5. Update Device Stats
+    cursor.execute("""
+        INSERT INTO device_stats (device_type, count) 
+        VALUES (?, 1) 
+        ON CONFLICT(device_type) 
+        DO UPDATE SET count = count + 1
+    """, (ua_info["device"],))
+
+    # 6. Update Browser Stats
+    cursor.execute("""
+        INSERT INTO browser_stats (browser_family, count) 
+        VALUES (?, 1) 
+        ON CONFLICT(browser_family) 
+        DO UPDATE SET count = count + 1
+    """, (ua_info["browser"],))
+
+    # 7. Update OS Stats
+    cursor.execute("""
+        INSERT INTO os_stats (os_family, count) 
+        VALUES (?, 1) 
+        ON CONFLICT(os_family) 
+        DO UPDATE SET count = count + 1
+    """, (ua_info["os"],))
+    
     conn.commit()
     conn.close()
     
-    return {"status": "ok", "country": country, "unique": is_unique, "page": page_path}
+    return {
+        "status": "ok", 
+        "country": country, 
+        "unique": is_unique, 
+        "page": page_path,
+        "ua_info": ua_info
+    }
 
 @router.get("/stats")
 def get_stats():
@@ -82,11 +116,23 @@ def get_stats():
     cursor.execute("SELECT * FROM page_stats ORDER BY view_count DESC")
     pages = {row["page_path"]: row["view_count"] for row in cursor.fetchall()}
     
+    cursor.execute("SELECT * FROM device_stats ORDER BY count DESC")
+    devices = {row["device_type"]: row["count"] for row in cursor.fetchall()}
+
+    cursor.execute("SELECT * FROM browser_stats ORDER BY count DESC")
+    browsers = {row["browser_family"]: row["count"] for row in cursor.fetchall()}
+
+    cursor.execute("SELECT * FROM os_stats ORDER BY count DESC")
+    os_stats = {row["os_family"]: row["count"] for row in cursor.fetchall()}
+    
     conn.close()
     
     return {
         "total_visits": total_visits,
         "unique_visitors": unique_visitors,
         "countries": countries,
-        "pages": pages
+        "pages": pages,
+        "devices": devices,
+        "browsers": browsers,
+        "os": os_stats
     }

@@ -2,6 +2,7 @@ import hashlib
 import os
 from pathlib import Path
 import geoip2.database
+from user_agents import parse
 
 # Salt for hashing IP addresses. 
 # Created once and stored to maintain consistency across restarts.
@@ -46,3 +47,40 @@ def get_country_from_ip(ip_address: str) -> str:
             return response.country.iso_code or "Unknown"
     except (FileNotFoundError, Exception):
         return "Unknown"
+
+def parse_user_agent_info(ua_string: str):
+    """
+    Parses User-Agent string to extract Device, Browser, and OS info.
+    """
+    if not ua_string:
+        return {
+            "device": "Unknown",
+            "browser": "Unknown",
+            "os": "Unknown"
+        }
+        
+    user_agent = parse(ua_string)
+    
+    # Device Type
+    if user_agent.is_mobile:
+        device = "Mobile"
+    elif user_agent.is_tablet:
+        device = "Tablet"
+    elif user_agent.is_pc:
+        device = "Desktop"
+    elif user_agent.is_bot:
+        device = "Bot"
+    else:
+        device = "Other"
+        
+    # Browser Family (e.g., "Chrome", "Firefox", "Mobile Safari")
+    browser = user_agent.browser.family
+    
+    # OS Family (e.g., "Windows", "Mac OS X", "iOS", "Android")
+    os_family = user_agent.os.family
+    
+    return {
+        "device": device,
+        "browser": browser,
+        "os": os_family
+    }

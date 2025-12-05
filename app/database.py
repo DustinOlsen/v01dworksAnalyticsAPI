@@ -35,6 +35,24 @@ def init_db():
         )
     """)
     cursor.execute("""
+        CREATE TABLE IF NOT EXISTS device_stats (
+            device_type TEXT PRIMARY KEY,
+            count INTEGER DEFAULT 0
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS browser_stats (
+            browser_family TEXT PRIMARY KEY,
+            count INTEGER DEFAULT 0
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS os_stats (
+            os_family TEXT PRIMARY KEY,
+            count INTEGER DEFAULT 0
+        )
+    """)
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS general_stats (
             key TEXT PRIMARY KEY,
             value INTEGER DEFAULT 0
