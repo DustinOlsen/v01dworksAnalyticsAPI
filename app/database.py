@@ -18,9 +18,9 @@ def get_db_path(site_id: str) -> Path:
 def get_db(site_id: str = "default"):
     db_path = get_db_path(site_id)
     
-    # Lazy initialization: if DB doesn't exist, create tables
-    if not db_path.exists():
-        init_db(site_id)
+    # Always ensure tables exist, even if file exists
+    # This handles schema migrations (like adding new tables)
+    init_db(site_id)
         
     conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.row_factory = sqlite3.Row

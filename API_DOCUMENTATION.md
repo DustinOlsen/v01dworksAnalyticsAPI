@@ -68,7 +68,42 @@ Records a new visit. Call this endpoint from your frontend application when a pa
   });
   ```
 
-### 3. Get Statistics
+### 3. Track an Outgoing Link
+Records a click on an external link.
+
+- **URL**: `/click`
+- **Method**: `POST`
+- **Headers**:
+  - `Content-Type: application/json`
+- **Body** (JSON):
+  ```json
+  {
+    "url": "https://twitter.com/myprofile",
+    "site_id": "my-website-name"  // Optional. Defaults to "default"
+  }
+  ```
+
+- **Response**:
+  ```json
+  {
+    "status": "ok",
+    "url": "https://twitter.com/myprofile"
+  }
+  ```
+
+- **Example (JavaScript)**:
+  ```javascript
+  fetch('http://localhost:8011/click', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      url: 'https://twitter.com/myprofile',
+      site_id: 'my-portfolio'
+    })
+  });
+  ```
+
+### 4. Get Statistics
 Retrieves the aggregated visitor statistics for a specific site.
 
 - **URL**: `/stats`
@@ -108,6 +143,10 @@ Retrieves the aggregated visitor statistics for a specific site.
     "referrers": {
         "Search Engine": 60,
         "Direct": 40
+    },
+    "links": {
+        "https://twitter.com/myprofile": 15,
+        "https://github.com/myrepo": 8
     }
   }
   ```
