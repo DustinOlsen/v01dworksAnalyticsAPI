@@ -5,3 +5,4 @@ user-agents
 scikit-learn
 pandas
 numpy
+cryptography

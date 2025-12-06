@@ -10,6 +10,7 @@ A super basic, privacy-respecting visitor count tracker built with Python and Fa
     - **Traffic Forecasting**: Predicts future visitor trends.
     - **Anomaly Detection**: Identifies unusual traffic spikes or dips.
     - **Bot Detection**: Flags suspicious bot-like behavior.
+- **Optional Authentication**: Secure your data with Ed25519 key-based authentication.
 - **Country Statistics**: Tracks visitor counts by country using GeoLite2 (local database).
 - **Page View & Link Tracking**: Tracks most visited pages and outgoing link clicks.
 - **Simple Statistics**: Provides total visits, unique visitors count, country breakdown, and page views.

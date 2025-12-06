@@ -115,6 +115,12 @@ def init_db(site_id: str = "default"):
         )
     """)
     cursor.execute("""
+        CREATE TABLE IF NOT EXISTS auth_config (
+            key_type TEXT PRIMARY KEY,
+            key_value TEXT
+        )
+    """)
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS general_stats (
             key TEXT PRIMARY KEY,
             value INTEGER DEFAULT 0

@@ -1,10 +1,11 @@
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Depends, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
 from .database import get_db, list_sites
 from .utils import hash_ip, get_country_from_ip, parse_user_agent_info, parse_referrer_category
 from .ml import generate_forecast, generate_summary, detect_anomalies, detect_bots
+from .auth import verify_signature
 import sqlite3
 
 router = APIRouter()
@@ -16,6 +17,34 @@ class VisitData(BaseModel):
 class ClickData(BaseModel):
     url: str
     site_id: str = "default"
+
+class RegisterKeyData(BaseModel):
+    site_id: str
+    public_key_hex: str
+
+@router.post("/register-key")
+def register_key(data: RegisterKeyData):
+    """
+    Registers a public key for a site. 
+    This is a one-time setup. Once a key is registered, all subsequent 
+    requests to stats endpoints for this site MUST be signed.
+    """
+    conn = get_db(data.site_id)
+    cursor = conn.cursor()
+    
+    # Check if key already exists
+    cursor.execute("SELECT key_value FROM auth_config WHERE key_type = 'public_key'")
+    if cursor.fetchone():
+        conn.close()
+        raise HTTPException(status_code=400, detail="Public key already registered for this site")
+        
+    cursor.execute(
+        "INSERT INTO auth_config (key_type, key_value) VALUES ('public_key', ?)",
+        (data.public_key_hex,)
+    )
+    conn.commit()
+    conn.close()
+    return {"status": "ok", "message": "Public key registered"}
 
 @router.get("/sites")
 def get_sites():
@@ -180,7 +209,7 @@ def track_visit(request: Request, data: Optional[VisitData] = None):
         "referrer": referrer_category
     }
 
-@router.get("/stats")
+@router.get("/stats", dependencies=[Depends(verify_signature)])
 def get_stats(site_id: str = "default"):
     conn = get_db(site_id)
     conn.row_factory = sqlite3.Row
@@ -234,18 +263,18 @@ def get_stats(site_id: str = "default"):
         "links": links
     }
 
-@router.get("/forecast")
+@router.get("/forecast", dependencies=[Depends(verify_signature)])
 def get_forecast(site_id: str = "default", days: int = 7):
     return generate_forecast(site_id, days)
 
-@router.get("/summary")
+@router.get("/summary", dependencies=[Depends(verify_signature)])
 def get_summary(site_id: str = "default"):
     return generate_summary(site_id)
 
-@router.get("/anomalies")
+@router.get("/anomalies", dependencies=[Depends(verify_signature)])
 def get_anomalies(site_id: str = "default"):
     return detect_anomalies(site_id)
 
-@router.get("/bots")
+@router.get("/bots", dependencies=[Depends(verify_signature)])
 def get_bots(site_id: str = "default"):
     return detect_bots(site_id)

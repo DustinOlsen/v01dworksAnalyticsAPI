@@ -2,6 +2,10 @@
 
 Base URL: `http://localhost:8011` (default)
 
+## Authentication
+
+This API supports optional key-based authentication. See [AUTH_GUIDE.md](AUTH_GUIDE.md) for details on generating keys and signing requests.
+
 ## Multi-Site Support
 
 This API supports tracking multiple websites independently. Each site has its own isolated database.
@@ -10,7 +14,20 @@ If no `site_id` is provided, data is stored in the "default" database.
 
 ## Endpoints
 
-### 1. Check API Status
+### 1. Register Public Key
+Registers a public key for a site to enable authentication.
+
+- **URL**: `/register-key`
+- **Method**: `POST`
+- **Body**:
+  ```json
+  {
+    "site_id": "my-site",
+    "public_key_hex": "..."
+  }
+  ```
+
+### 2. Check API Status
 Checks if the API is running.
 
 - **URL**: `/`
