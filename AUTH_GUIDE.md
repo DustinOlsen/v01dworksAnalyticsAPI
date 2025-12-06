@@ -5,6 +5,20 @@ By default, all stats are public. Once you register a public key for a `site_id`
 
 ## How it Works
 
+There are two ways to set up authentication:
+
+### Method A: QR Code Pairing (Easiest for iOS App)
+Simply visit the pairing endpoint in your browser:
+`http://localhost:8011/pair/<your-site-id>`
+
+This will:
+1.  Generate a new key pair on the server.
+2.  Register the public key automatically.
+3.  Display a QR code containing the **Private Key**, **Site ID**, and **API URL**.
+4.  Scan this with your app to configure it instantly.
+
+### Method B: Manual Setup (For Scripts/Custom Clients)
+
 1.  **Generate a Key Pair**: You generate an Ed25519 key pair (Public + Private) on your client/server.
 2.  **Register Public Key**: You send the Public Key (in Hex format) to the API's `/register-key` endpoint.
 3.  **Sign Requests**: When fetching stats, you sign the request using your Private Key.

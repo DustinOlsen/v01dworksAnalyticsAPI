@@ -27,7 +27,23 @@ Registers a public key for a site to enable authentication.
   }
   ```
 
-### 2. Check API Status
+### 2. Pair Device (QR Code)
+Generates a new key pair and returns a QR code for easy setup with the iOS app.
+**Note**: This only works if no key is currently registered for the site.
+
+- **URL**: `/pair/{site_id}`
+- **Method**: `GET`
+- **Response**: HTML page with QR Code.
+- **QR Payload (JSON)**:
+  ```json
+  {
+    "base_url": "http://...",
+    "site_id": "...",
+    "private_key": "..."
+  }
+  ```
+
+### 3. Check API Status
 Checks if the API is running.
 
 - **URL**: `/`

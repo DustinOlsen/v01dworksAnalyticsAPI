@@ -1,7 +1,14 @@
 from fastapi import APIRouter, Request, Depends, HTTPException
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives import serialization
+import qrcode
+import io
+import base64
+import json
 from .database import get_db, list_sites
 from .utils import hash_ip, get_country_from_ip, parse_user_agent_info, parse_referrer_category
 from .ml import generate_forecast, generate_summary, detect_anomalies, detect_bots
@@ -45,6 +52,107 @@ def register_key(data: RegisterKeyData):
     conn.commit()
     conn.close()
     return {"status": "ok", "message": "Public key registered"}
+
+@router.get("/pair/{site_id}", response_class=HTMLResponse)
+def pair_device(site_id: str, request: Request):
+    """
+    Generates a new key pair for the site and returns a QR code 
+    containing the configuration (URL, Site ID, Private Key) for the iOS app.
+    Only works if no key is currently registered.
+    """
+    conn = get_db(site_id)
+    cursor = conn.cursor()
+    
+    # 1. Check if key already exists
+    cursor.execute("SELECT key_value FROM auth_config WHERE key_type = 'public_key'")
+    if cursor.fetchone():
+        conn.close()
+        return HTMLResponse(
+            "<h1>Error: Already Paired</h1>"
+            "<p>A public key is already registered for this site.</p>"
+            "<p>To re-pair, you must manually delete the key from the database or use a new site ID.</p>",
+            status_code=403
+        )
+        
+    # 2. Generate New Key Pair
+    private_key = Ed25519PrivateKey.generate()
+    public_key = private_key.public_key()
+    
+    # Serialize Keys
+    private_hex = private_key.private_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PrivateFormat.Raw,
+        encryption_algorithm=serialization.NoEncryption()
+    ).hex()
+
+    public_hex = public_key.public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw
+    ).hex()
+    
+    # 3. Save Public Key to DB
+    cursor.execute(
+        "INSERT INTO auth_config (key_type, key_value) VALUES ('public_key', ?)",
+        (public_hex,)
+    )
+    conn.commit()
+    conn.close()
+    
+    # 4. Create QR Payload
+    # Use the request's base URL (e.g., http://192.168.1.5:8000)
+    base_url = str(request.base_url).rstrip("/")
+    
+    payload = {
+        "base_url": base_url,
+        "site_id": site_id,
+        "private_key": private_hex
+    }
+    
+    # 5. Generate QR Code Image
+    qr = qrcode.QRCode(box_size=10, border=4)
+    qr.add_data(json.dumps(payload))
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+    
+    # Convert to Base64 for HTML embedding
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    img_b64 = base64.b64encode(buf.getvalue()).decode()
+    
+    # 6. Return HTML
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+        <head>
+            <title>Pair Device - {site_id}</title>
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <style>
+                body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; text-align: center; padding: 20px; max-width: 600px; margin: 0 auto; }}
+                .qr-container {{ margin: 20px 0; border: 1px solid #eee; padding: 20px; display: inline-block; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }}
+                .warning {{ color: #d32f2f; background: #ffebee; padding: 10px; border-radius: 5px; font-size: 0.9em; margin-top: 20px; }}
+                code {{ background: #f5f5f5; padding: 2px 5px; border-radius: 3px; }}
+            </style>
+        </head>
+        <body>
+            <h1>Pair with iOS App</h1>
+            <p>Scan this QR code to configure access for site:</p>
+            <h2>{site_id}</h2>
+            
+            <div class="qr-container">
+                <img src="data:image/png;base64,{img_b64}" alt="QR Code" width="300" height="300"/>
+            </div>
+            
+            <div class="warning">
+                <strong>Security Warning:</strong> This QR code contains your <strong>Private Key</strong>. 
+                <br>Do not share this screen or screenshot it. 
+                <br>Once scanned, close this page.
+            </div>
+            
+            <p><small>Public Key has been registered successfully.</small></p>
+        </body>
+    </html>
+    """
+    return HTMLResponse(content=html_content)
 
 @router.get("/sites")
 def get_sites():
