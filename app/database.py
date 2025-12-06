@@ -15,6 +15,16 @@ def get_db_path(site_id: str) -> Path:
         safe_id = "default"
     return DATA_DIR / f"{safe_id}.db"
 
+def list_sites():
+    """
+    Lists all available site IDs based on the database files.
+    """
+    sites = []
+    for file in DATA_DIR.glob("*.db"):
+        # Remove .db extension
+        sites.append(file.stem)
+    return sorted(sites)
+
 def get_db(site_id: str = "default"):
     db_path = get_db_path(site_id)
     

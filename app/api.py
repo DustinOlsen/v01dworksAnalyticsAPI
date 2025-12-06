@@ -2,7 +2,7 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
-from .database import get_db
+from .database import get_db, list_sites
 from .utils import hash_ip, get_country_from_ip, parse_user_agent_info, parse_referrer_category
 from .ml import generate_forecast, generate_summary, detect_anomalies, detect_bots
 import sqlite3
@@ -16,6 +16,10 @@ class VisitData(BaseModel):
 class ClickData(BaseModel):
     url: str
     site_id: str = "default"
+
+@router.get("/sites")
+def get_sites():
+    return {"sites": list_sites()}
 
 @router.post("/click")
 def track_click(request: Request, data: ClickData):

@@ -22,7 +22,23 @@ Checks if the API is running.
   }
   ```
 
-### 2. Track a Visit
+### 2. List All Sites
+Returns a list of all site IDs that have data stored.
+
+- **URL**: `/sites`
+- **Method**: `GET`
+- **Response**:
+  ```json
+  {
+    "sites": [
+      "default",
+      "my-blog",
+      "portfolio"
+    ]
+  }
+  ```
+
+### 3. Track a Visit
 Records a new visit. Call this endpoint from your frontend application when a page loads.
 
 - **URL**: `/track`
@@ -68,7 +84,7 @@ Records a new visit. Call this endpoint from your frontend application when a pa
   });
   ```
 
-### 3. Track an Outgoing Link
+### 4. Track an Outgoing Link
 Records a click on an external link.
 
 - **URL**: `/click`
@@ -103,7 +119,7 @@ Records a click on an external link.
   });
   ```
 
-### 4. Get Statistics
+### 5. Get Statistics
 Retrieves the aggregated visitor statistics for a specific site.
 
 - **URL**: `/stats`
@@ -157,7 +173,7 @@ Retrieves the aggregated visitor statistics for a specific site.
   curl "http://localhost:8011/stats?site_id=my-portfolio"
   ```
 
-### 5. Get Traffic Forecast (ML)
+### 6. Get Traffic Forecast (ML)
 Predicts future visitor counts using Linear Regression.
 
 - **URL**: `/forecast`
@@ -179,7 +195,7 @@ Predicts future visitor counts using Linear Regression.
   }
   ```
 
-### 6. Get Summary Insights (ML)
+### 7. Get Summary Insights (ML)
 Provides statistical summaries and growth metrics.
 
 - **URL**: `/summary`
@@ -201,7 +217,7 @@ Provides statistical summaries and growth metrics.
   }
   ```
 
-### 7. Detect Anomalies (ML)
+### 8. Detect Anomalies (ML)
 Identifies unusual traffic spikes or dips using Isolation Forest.
 
 - **URL**: `/anomalies`
@@ -223,7 +239,7 @@ Identifies unusual traffic spikes or dips using Isolation Forest.
   }
   ```
 
-### 8. Detect Bots (ML)
+### 9. Detect Bots (ML)
 Identifies potential bots based on request patterns and user agent scores.
 
 - **URL**: `/bots`
