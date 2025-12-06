@@ -4,6 +4,7 @@ from typing import Optional
 from datetime import datetime
 from .database import get_db
 from .utils import hash_ip, get_country_from_ip, parse_user_agent_info, parse_referrer_category
+from .ml import generate_forecast, generate_summary, detect_anomalies
 import sqlite3
 
 router = APIRouter()
@@ -211,3 +212,15 @@ def get_stats(site_id: str = "default"):
         "referrers": referrers,
         "links": links
     }
+
+@router.get("/forecast")
+def get_forecast(site_id: str = "default", days: int = 7):
+    return generate_forecast(site_id, days)
+
+@router.get("/summary")
+def get_summary(site_id: str = "default"):
+    return generate_summary(site_id)
+
+@router.get("/anomalies")
+def get_anomalies(site_id: str = "default"):
+    return detect_anomalies(site_id)
