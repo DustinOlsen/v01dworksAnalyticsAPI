@@ -4,13 +4,41 @@ Base URL: `http://localhost:8011` (default)
 
 ## Authentication
 
-This API supports optional key-based authentication. See [AUTH_GUIDE.md](AUTH_GUIDE.md) for details on generating keys and signing requests.
+This API supports optional key-based Ed25519 authentication per site. See [AUTH_GUIDE.md](AUTH_GUIDE.md) for key generation and signing details.
+
+**Endpoints marked 🔒 require signed requests once a public key is registered for the site.**  
+Endpoints without 🔒 are always public (`/track`, `/click`, `/sites`).
+
+### Signing a request
+Add two headers to authenticated requests:
+
+| Header | Value |
+|--------|-------|
+| `X-Timestamp` | Current Unix timestamp (integer) |
+| `X-Signature` | `hex( Ed25519Sign(private_key, "{site_id}:{timestamp}") )` |
+
+Requests where the timestamp differs from the server clock by more than 5 minutes are rejected.
+
+## CORS
+
+Allowed origins are configured via the `ALLOWED_ORIGINS` environment variable (comma-separated). Set this to your media site's domain(s) before deploying:
+
+```bash
+export ALLOWED_ORIGINS="https://yourmediasite.com,https://www.yourmediasite.com"
+```
+
+Defaults to `http://localhost:3000,http://localhost:8011` for local development.
+
+## Rate Limiting
+
+`/track` is rate-limited to **60 requests per minute per IP**. Exceeding this returns `HTTP 429`.
+Request bodies larger than 64 KB are rejected with `HTTP 413`.
 
 ## Multi-Site Support
 
 This API supports tracking multiple websites independently. Each site has its own isolated database.
-To track a specific site, simply provide a unique `site_id` (e.g., "my-blog", "portfolio", "client-site-1") when calling the endpoints.
-If no `site_id` is provided, data is stored in the "default" database.
+To track a specific site, provide a unique `site_id` (e.g., `"my-blog"`, `"portfolio"`, `"client-site-1"`).
+If no `site_id` is provided, data is stored in the `"default"` database.
 
 ## Endpoints
 
@@ -29,10 +57,11 @@ Registers a public key for a site to enable authentication.
 
 ### 2. Pair Device (QR Code)
 Generates a new key pair and returns a QR code for easy setup with the iOS app.
-**Note**: This only works if no key is currently registered for the site.
 
 - **URL**: `/pair/{site_id}`
 - **Method**: `GET`
+- **Query Parameters**:
+  - `force` (optional, bool): Re-generate key even if one exists. **Requires valid auth headers** (`X-Timestamp` + `X-Signature`) when a key is already registered, to prevent unauthorized key replacement.
 - **Response**: HTML page with QR Code.
 - **QR Payload (JSON)**:
   ```json
@@ -77,7 +106,9 @@ Returns a list of all site IDs that have data stored, along with their authentic
   ```
 
 ### 3. Track a Visit
-Records a new visit. Call this endpoint from your frontend application when a page loads.
+Records a new visit. Call this from your frontend when a page loads.
+
+**Rate limit**: 60 requests/minute per IP.
 
 - **URL**: `/track`
 - **Method**: `POST`
@@ -157,8 +188,10 @@ Records a click on an external link.
   });
   ```
 
-### 5. Get Statistics
-Retrieves the aggregated visitor statistics for a specific site.
+### 5. Get Statistics 🔒
+Retrieves aggregated visitor statistics for a specific site.
+
+> **Requires auth headers if a public key is registered for the site.**
 
 - **URL**: `/stats`
 - **Method**: `GET`
@@ -211,14 +244,16 @@ Retrieves the aggregated visitor statistics for a specific site.
   curl "http://localhost:8011/stats?site_id=my-portfolio"
   ```
 
-### 6. Get Traffic Forecast (ML)
+### 6. Get Traffic Forecast (ML) 🔒
 Predicts future visitor counts using Linear Regression.
+
+> **Requires auth headers if a public key is registered for the site.**
 
 - **URL**: `/forecast`
 - **Method**: `GET`
 - **Query Parameters**:
-  - `site_id` (optional): Defaults to "default".
-  - `days` (optional): Number of days to predict (default: 7).
+  - `site_id` (optional): Defaults to `"default"`.
+  - `days` (optional): Number of days to predict. Range: 1–90. Defaults to `7`.
 
 - **Response**:
   ```json
@@ -233,8 +268,10 @@ Predicts future visitor counts using Linear Regression.
   }
   ```
 
-### 7. Get Summary Insights (ML)
+### 7. Get Summary Insights (ML) 🔒
 Provides statistical summaries and growth metrics.
+
+> **Requires auth headers if a public key is registered for the site.**
 
 - **URL**: `/summary`
 - **Method**: `GET`
@@ -255,8 +292,10 @@ Provides statistical summaries and growth metrics.
   }
   ```
 
-### 8. Detect Anomalies (ML)
+### 8. Detect Anomalies (ML) 🔒
 Identifies unusual traffic spikes or dips using Isolation Forest.
+
+> **Requires auth headers if a public key is registered for the site.**
 
 - **URL**: `/anomalies`
 - **Method**: `GET`
@@ -277,8 +316,10 @@ Identifies unusual traffic spikes or dips using Isolation Forest.
   }
   ```
 
-### 9. Detect Bots (ML)
+### 9. Detect Bots (ML) 🔒
 Identifies potential bots based on request patterns and user agent scores.
+
+> **Requires auth headers if a public key is registered for the site.**
 
 - **URL**: `/bots`
 - **Method**: `GET`

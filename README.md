@@ -58,6 +58,8 @@ A lightweight, privacy-respecting analytics API built with Python (FastAPI) and 
 
 2.  **Run**:
     ```bash
+    # Set your site's domain before starting (no wildcard CORS in production)
+    export ALLOWED_ORIGINS="https://yourmediasite.com,https://www.yourmediasite.com"
     uvicorn main:app --reload --port 8011
     ```
 

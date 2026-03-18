@@ -7,6 +7,9 @@ import re
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
 
+# Track which site DBs have been initialised this process lifetime
+_initialized_sites: set = set()
+
 def get_db_path(site_id: str) -> Path:
     # Sanitize site_id to prevent path traversal
     # Allow alphanumeric, dashes, underscores, and dots (for domains)
@@ -25,18 +28,17 @@ def list_sites():
         sites.append(file.stem)
     return sorted(sites)
 
-def get_db(site_id: str = "default"):
+def get_db(site_id: str = "default") -> sqlite3.Connection:
+    """Return an open SQLite connection. Initialises the schema on first access per site."""
+    if site_id not in _initialized_sites:
+        init_db(site_id)  # init_db adds site_id to _initialized_sites
     db_path = get_db_path(site_id)
-    
-    # Always ensure tables exist, even if file exists
-    # This handles schema migrations (like adding new tables)
-    init_db(site_id)
-        
-    conn = sqlite3.connect(db_path, check_same_thread=False)
+    conn = sqlite3.connect(str(db_path), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
 
 def init_db(site_id: str = "default"):
+    global _initialized_sites
     db_path = get_db_path(site_id)
     conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -128,5 +130,26 @@ def init_db(site_id: str = "default"):
     """)
     # Initialize total visits if not exists
     cursor.execute("INSERT OR IGNORE INTO general_stats (key, value) VALUES ('total_visits', 0)")
+
+    # ── Indexes for ORDER BY performance ────────────────────────────────────
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_country_count ON country_stats(visitor_count DESC)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_page_count ON page_stats(view_count DESC)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_device_count ON device_stats(count DESC)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_browser_count ON browser_stats(count DESC)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_os_count ON os_stats(count DESC)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_referrer_count ON referrer_stats(count DESC)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_link_count ON link_stats(click_count DESC)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_activity_requests ON visitor_activity(request_count DESC)")
+
+    # ── Schema migrations ────────────────────────────────────────────────────
+    # Add created_at to auth_config if it doesn't exist yet (idempotent)
+    try:
+        cursor.execute(
+            "ALTER TABLE auth_config ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+        )
+    except Exception:
+        pass  # Column already present
+
     conn.commit()
     conn.close()
+    _initialized_sites.add(site_id)

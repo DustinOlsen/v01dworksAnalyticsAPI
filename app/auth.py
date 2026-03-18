@@ -6,6 +6,8 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from cryptography.exceptions import InvalidSignature
 from .database import get_db
 
+_UNAUTHORIZED = HTTPException(status_code=401, detail="Unauthorized")
+
 def verify_signature(
     request: Request,
     site_id: str = Query("default"),
@@ -15,55 +17,51 @@ def verify_signature(
     """
     Verifies the request signature using the stored public key for the site.
     If no key is stored, allows access (optional auth).
+    Message format signed by client: "{site_id}:{x_timestamp}" (hex-encoded Ed25519 signature).
     """
-    # 1. Check if site has a public key
+    # 1. Check if site has a public key registered
     conn = get_db(site_id)
     cursor = conn.cursor()
     cursor.execute("SELECT key_value FROM auth_config WHERE key_type = 'public_key'")
     row = cursor.fetchone()
     conn.close()
-    
+
     if not row:
-        # No key configured, allow public access
+        # No key configured — allow public access
         return True
-        
-    # 2. Key exists, so Auth is REQUIRED
+
+    # 2. Key exists; auth is required
     if not x_timestamp or not x_signature:
-        raise HTTPException(status_code=401, detail="Authentication required (Missing X-Timestamp or X-Signature)")
-    
+        raise _UNAUTHORIZED
+
     public_key_hex = row["key_value"]
-    
-    # 3. Verify Timestamp (prevent replay attacks)
-    # Allow 5 minute window
+
+    # 3. Verify timestamp to prevent replay attacks (5-minute window)
     current_time = int(time.time())
     if abs(current_time - x_timestamp) > 300:
-        raise HTTPException(status_code=401, detail="Timestamp expired or invalid")
-        
-    # 4. Verify Signature
+        raise _UNAUTHORIZED
+
+    # 4. Verify Ed25519 signature
     try:
-        # Reconstruct the message: "site_id:timestamp"
-        # We use the site_id from the query param as the source of truth
         message = f"{site_id}:{x_timestamp}".encode()
-        
-        # Decode signature (expecting Hex)
+
         try:
             signature = bytes.fromhex(x_signature)
         except ValueError:
-            raise HTTPException(status_code=401, detail="Invalid signature format (Hex expected)")
-            
-        # Load Public Key (Ed25519)
-        # We expect the key to be stored as a Hex string of the raw bytes
+            raise _UNAUTHORIZED
+
         try:
             public_key_bytes = bytes.fromhex(public_key_hex)
             public_key = Ed25519PublicKey.from_public_bytes(public_key_bytes)
         except ValueError:
-             raise HTTPException(status_code=500, detail="Stored public key is invalid")
+            raise HTTPException(status_code=500, detail="Internal server error")
 
         public_key.verify(signature, message)
         return True
-        
+
     except InvalidSignature:
-        raise HTTPException(status_code=401, detail="Invalid signature")
-    except Exception as e:
-        print(f"Auth Error: {e}")
-        raise HTTPException(status_code=401, detail="Authentication failed")
+        raise _UNAUTHORIZED
+    except HTTPException:
+        raise
+    except Exception:
+        raise _UNAUTHORIZED
