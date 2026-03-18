@@ -1,42 +1,75 @@
 # Authentication Guide
 
-This API supports optional Ed25519 key-based authentication for securing your analytics data.
-By default, all stats are public. Once you register a public key for a `site_id`, all data retrieval endpoints for that site will require a valid signature.
+This API supports optional Ed25519 key-based authentication, configured per `site_id`.
+
+- A site with **no registered key** is fully public — anyone can read its stats.
+- Once a public key is registered for a `site_id`, all analytics read endpoints (`/stats`, `/forecast`, `/summary`, `/anomalies`, `/bots`) for that site require a valid signed request.
+- Auth is **not** required for write endpoints (`/track`, `/click`).
+
+---
 
 ## How it Works
 
-There are two ways to set up authentication:
+1. You hold an Ed25519 **private key** (never leaves your client).
+2. You register the corresponding **public key** with the API once.
+3. For every authenticated request you add two HTTP headers:
+   - `X-Timestamp` — current Unix timestamp (integer, as a string header value)
+   - `X-Signature` — `hex( Ed25519Sign(private_key, "{site_id}:{timestamp}") )`
+4. The server verifies the signature. Requests where the timestamp differs from server time by more than **300 seconds** are rejected.
 
-### Method A: QR Code Pairing (Easiest for iOS App)
-Simply visit the pairing endpoint in your browser:
-`http://localhost:8011/pair/<your-site-id>`
+All auth failures return the same generic body (no information leaked):
+```json
+HTTP 401
+{ "detail": "Unauthorized" }
+```
 
-This will:
-1.  Generate a new key pair on the server.
-2.  Register the public key automatically.
-3.  Display a QR code containing the **Private Key**, **Site ID**, and **API URL**.
-4.  Scan this with your app to configure it instantly.
+---
 
-### Method B: Manual Setup (For Scripts/Custom Clients)
+## Setup Methods
 
-1.  **Generate a Key Pair**: You generate an Ed25519 key pair (Public + Private) on your client/server.
-2.  **Register Public Key**: You send the Public Key (in Hex format) to the API's `/register-key` endpoint.
-3.  **Sign Requests**: When fetching stats, you sign the request using your Private Key.
+### Method A — Browser Pairing (QR Code)
 
-## 1. Generating Keys (Python Example)
+Navigate to `http://localhost:8011/pair/<your-site-id>` in a browser.
 
-You can use the `cryptography` library to generate keys.
+The server will:
+1. Generate a new Ed25519 key pair.
+2. Store the public key in the site's database.
+3. Display an HTML page with a QR code.
+
+The QR code encodes a JSON payload:
+```json
+{
+  "base_url": "http://192.168.1.5:8011",
+  "site_id": "my-secure-site",
+  "private_key": "<64-char hex — keep this secret>"
+}
+```
+
+Scan with the iOS companion app to configure it instantly. **Close the browser tab after scanning** — the page contains your raw private key.
+
+To replace an existing key, add `?force=true`. This requires valid auth headers (`X-Timestamp` + `X-Signature`) to prove you hold the current private key.
+
+### Method B — Manual / Programmatic Setup
+
+1. Generate a key pair on your client (example below).
+2. Register the public key via `POST /register-key`.
+3. Sign every subsequent analytics request with the private key.
+
+---
+
+## Step 1 — Generate a Key Pair
 
 ```python
-from cryptography.hazmat.primitives.asymmetric import ed25519
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives import serialization
 
 # Generate private key
-private_key = ed25519.Ed25519PrivateKey.generate()
+private_key = Ed25519PrivateKey.generate()
 
-# Get public key
+# Derive public key
 public_key = private_key.public_key()
 
-# Get Hex strings
+# Hex-encode both (raw bytes, no PEM wrapping)
 private_hex = private_key.private_bytes(
     encoding=serialization.Encoding.Raw,
     format=serialization.PrivateFormat.Raw,
@@ -48,55 +81,74 @@ public_hex = public_key.public_bytes(
     format=serialization.PublicFormat.Raw
 ).hex()
 
-print(f"Private Key (Keep Secret): {private_hex}")
-print(f"Public Key (Register this): {public_hex}")
+print(f"Private Key (keep secret): {private_hex}")
+print(f"Public Key  (register this): {public_hex}")
 ```
 
-## 2. Registering the Key
+> Save `private_hex` securely (environment variable, secret manager, etc.). You cannot recover it from the API.
 
-Send a POST request to `/register-key`:
+---
 
-```json
-POST /register-key
-{
-  "site_id": "my-secure-site",
-  "public_key_hex": "<your_public_key_hex>"
-}
+## Step 2 — Register the Public Key
+
+```python
+import requests
+
+requests.post("http://localhost:8011/register-key", json={
+    "site_id": "my-secure-site",
+    "public_key_hex": public_hex
+}).raise_for_status()
 ```
 
-## 3. Making Authenticated Requests
+This is a **one-time operation**. The endpoint returns `HTTP 400` if a key is already registered for the site.
 
-To fetch stats, you must include the following headers:
+---
 
--   `X-Timestamp`: Current Unix timestamp (integer). Must be within 5 minutes of server time.
--   `X-Signature`: Hex-encoded signature of the string `site_id:timestamp`.
-
-### Python Client Example
+## Step 3 — Sign Requests
 
 ```python
 import time
 import requests
-from cryptography.hazmat.primitives.asymmetric import ed25519
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-# Your Private Key (Hex)
-private_key_hex = "..." 
-site_id = "my-secure-site"
-base_url = "http://localhost:8011"
+BASE_URL       = "http://localhost:8011"
+SITE_ID        = "my-secure-site"
+PRIVATE_KEY_HEX = "..."  # your saved private_hex from Step 1
 
-# Load Private Key
-private_key = ed25519.Ed25519PrivateKey.from_private_bytes(bytes.fromhex(private_key_hex))
+def auth_headers(site_id: str, private_key_hex: str) -> dict:
+    """Returns X-Timestamp and X-Signature headers for one request."""
+    private_key = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(private_key_hex))
+    timestamp   = int(time.time())
+    message     = f"{site_id}:{timestamp}".encode()
+    signature   = private_key.sign(message).hex()
+    return {
+        "X-Timestamp": str(timestamp),
+        "X-Signature": signature
+    }
 
-# Create Signature
-timestamp = int(time.time())
-message = f"{site_id}:{timestamp}".encode()
-signature = private_key.sign(message).hex()
+# Fetch stats
+response = requests.get(
+    f"{BASE_URL}/stats",
+    params={"site_id": SITE_ID},
+    headers=auth_headers(SITE_ID, PRIVATE_KEY_HEX)
+)
+print(response.json())
 
-# Send Request
-headers = {
-    "X-Timestamp": str(timestamp),
-    "X-Signature": signature
-}
-
-response = requests.get(f"{base_url}/stats?site_id={site_id}", headers=headers)
+# Fetch forecast (7 days)
+response = requests.get(
+    f"{BASE_URL}/forecast",
+    params={"site_id": SITE_ID, "days": 7},
+    headers=auth_headers(SITE_ID, PRIVATE_KEY_HEX)
+)
 print(response.json())
 ```
+
+> `auth_headers()` must be called fresh for **each request** — the timestamp changes and a stale one will be rejected after 5 minutes.
+
+---
+
+## Key Rotation
+
+To replace an existing key, call `/pair/{site_id}?force=true` with valid auth headers for the **current** key. The server verifies the existing key before deleting it and generating a new pair.
+
+There is no programmatic key rotation endpoint — use the `/pair?force=true` browser flow or delete the site's `.db` file to start fresh.
