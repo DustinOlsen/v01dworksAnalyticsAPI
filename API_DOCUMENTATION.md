@@ -23,11 +23,12 @@
    - [POST /track](#5-post-track)
    - [POST /click](#6-post-click)
    - [GET /stats 🔒](#7-get-stats-)
-   - [GET /forecast 🔒](#8-get-forecast-)
-   - [GET /summary 🔒](#9-get-summary-)
-   - [GET /anomalies 🔒](#10-get-anomalies-)
-   - [GET /bots 🔒](#11-get-bots-)
-   - [GET /debug/auth-status/{site_id}](#12-get-debugauth-statussite_id)
+   - [GET /page-stats 🔒](#8-get-page-stats-)
+   - [GET /forecast 🔒](#9-get-forecast-)
+   - [GET /summary 🔒](#10-get-summary-)
+   - [GET /anomalies 🔒](#11-get-anomalies-)
+   - [GET /bots 🔒](#12-get-bots-)
+   - [GET /debug/auth-status/{site_id}](#13-get-debugauth-statussite_id)
 6. [Field Value Reference](#field-value-reference)
 7. [Error Response Reference](#error-response-reference)
 8. [Complete Integration Examples](#complete-integration-examples)
@@ -38,7 +39,7 @@
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ALLOWED_ORIGINS` | `http://localhost:3000,http://localhost:8011` | Comma-separated list of allowed CORS origins. **Set this to your production domain(s).** |
+| `ALLOWED_ORIGINS` | `http://localhost:3000,http://localhost:8000,http://localhost:8011` | Comma-separated list of allowed CORS origins. **Set this to your production domain(s).** |
 | `ENABLE_DEBUG_ENDPOINTS` | `false` | Set to `true` to expose `/debug/auth-status/{site_id}`. Do not enable in production. |
 
 **GeoLite2 database** — country lookups require a MaxMind GeoLite2 database file placed in the **project root**. The API checks for these filenames in order:
@@ -349,7 +350,11 @@ GET /stats?site_id=my-media-site
   "browsers":  { "Chrome": 2400, "Safari": 900 },
   "os":        { "Windows": 1800, "Mac OS X": 900, "iOS": 700 },
   "referrers": { "Search Engine": 1900, "Direct": 1100, "Social Media": 600 },
-  "links":     { "https://github.com/myrepo": 42 }
+  "links":     { "https://github.com/myrepo": 42 },
+  "page_countries": {
+    "/": { "US": 900, "CA": 210 },
+    "/articles/my-post": { "US": 420, "GB": 180, "DE": 90 }
+  }
 }
 ```
 
@@ -372,7 +377,50 @@ curl -H "X-Timestamp: $TIMESTAMP" \
 
 ---
 
-### 8. GET /forecast 🔒
+### 8. GET /page-stats 🔒
+
+Returns the view count and per-country breakdown for a **single page path**. Designed for displaying analytics inline on the page itself.
+
+```
+GET /page-stats?site_id=my-media-site&path=/articles/my-post
+```
+
+**Auth**: Required if a public key is registered for the site.
+
+**Query parameters**
+
+| Param | Default | Description |
+|-------|---------|-------------|
+| `site_id` | `"default"` | Site to query |
+| `path` | `"/"` | Exact page path to query |
+
+**Response `200`**
+```json
+{
+  "path": "/articles/my-post",
+  "view_count": 840,
+  "countries": {
+    "US": 420,
+    "GB": 180,
+    "DE": 90,
+    "CA": 75
+  }
+}
+```
+
+**JavaScript example (unauthenticated site)**
+```javascript
+fetch(`https://your-api.example.com/page-stats?site_id=my-media-site&path=${encodeURIComponent(window.location.pathname)}`)
+  .then(r => r.json())
+  .then(data => {
+    console.log(`${data.view_count} views`);
+    console.log('Top country:', Object.keys(data.countries)[0]);
+  });
+```
+
+---
+
+### 9. GET /forecast 🔒
 
 Predicts future daily visit counts using Linear Regression on historical data.
 
@@ -417,7 +465,7 @@ GET /forecast?site_id=my-media-site&days=14
 
 ---
 
-### 9. GET /summary 🔒
+### 10. GET /summary 🔒
 
 Returns statistical summaries and week-over-week growth metrics.
 
@@ -456,7 +504,7 @@ GET /summary?site_id=my-media-site
 
 ---
 
-### 10. GET /anomalies 🔒
+### 11. GET /anomalies 🔒
 
 Detects unusual daily traffic patterns (spikes or dips) using Isolation Forest.
 
@@ -497,7 +545,7 @@ GET /anomalies?site_id=my-media-site
 
 ---
 
-### 11. GET /bots 🔒
+### 12. GET /bots 🔒
 
 Identifies suspected bot visitors using Isolation Forest on request count, request rate, and user-agent score.
 
@@ -541,7 +589,7 @@ GET /bots?site_id=my-media-site
 
 ---
 
-### 12. GET /debug/auth-status/{site_id}
+### 13. GET /debug/auth-status/{site_id}
 
 Returns whether a public key is registered for the given site.
 

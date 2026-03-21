@@ -128,6 +128,14 @@ def init_db(site_id: str = "default"):
             value INTEGER DEFAULT 0
         )
     """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS page_country_stats (
+            page_path    TEXT NOT NULL,
+            country_code TEXT NOT NULL,
+            view_count   INTEGER DEFAULT 0,
+            PRIMARY KEY (page_path, country_code)
+        )
+    """)
     # Initialize total visits if not exists
     cursor.execute("INSERT OR IGNORE INTO general_stats (key, value) VALUES ('total_visits', 0)")
 
@@ -140,6 +148,7 @@ def init_db(site_id: str = "default"):
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_referrer_count ON referrer_stats(count DESC)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_link_count ON link_stats(click_count DESC)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_activity_requests ON visitor_activity(request_count DESC)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_page_country ON page_country_stats(page_path, view_count DESC)")
 
     # ── Schema migrations ────────────────────────────────────────────────────
     # Add created_at to auth_config if it doesn't exist yet (idempotent)
@@ -149,6 +158,21 @@ def init_db(site_id: str = "default"):
         )
     except Exception:
         pass  # Column already present
+
+    # Add page_country_stats for existing DBs that predate this table
+    # (CREATE TABLE IF NOT EXISTS above handles new DBs; this is a no-op on those)
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS page_country_stats (
+                page_path    TEXT NOT NULL,
+                country_code TEXT NOT NULL,
+                view_count   INTEGER DEFAULT 0,
+                PRIMARY KEY (page_path, country_code)
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_page_country ON page_country_stats(page_path, view_count DESC)")
+    except Exception:
+        pass
 
     conn.commit()
     conn.close()

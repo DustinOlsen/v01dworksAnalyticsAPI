@@ -365,6 +365,14 @@ def track_visit(request: Request, data: Optional[VisitData] = None):
             DO UPDATE SET count = count + 1
         """, (referrer_category,))
 
+        # 10. Per-page country stats
+        cursor.execute("""
+            INSERT INTO page_country_stats (page_path, country_code, view_count)
+            VALUES (?, ?, 1)
+            ON CONFLICT(page_path, country_code)
+            DO UPDATE SET view_count = view_count + 1
+        """, (page_path, country))
+
         conn.commit()
     finally:
         conn.close()
@@ -378,6 +386,38 @@ def track_visit(request: Request, data: Optional[VisitData] = None):
         "ua_info": ua_info,
         "referrer": referrer_category,
     }
+
+@router.get("/page-stats", dependencies=[Depends(verify_signature)])
+def get_page_stats(site_id: str = "default", path: str = "/"):
+    """
+    Returns view count and country breakdown for a single page path.
+    Useful for displaying per-page analytics directly on the page.
+    """
+    conn = get_db(site_id)
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "SELECT view_count FROM page_stats WHERE page_path = ?",
+            (path,)
+        )
+        row = cursor.fetchone()
+        view_count = row["view_count"] if row else 0
+
+        cursor.execute(
+            "SELECT country_code, view_count FROM page_country_stats "
+            "WHERE page_path = ? ORDER BY view_count DESC",
+            (path,)
+        )
+        countries = {r["country_code"]: r["view_count"] for r in cursor.fetchall()}
+    finally:
+        conn.close()
+
+    return {
+        "path": path,
+        "view_count": view_count,
+        "countries": countries,
+    }
+
 
 @router.get("/stats", dependencies=[Depends(verify_signature)])
 def get_stats(site_id: str = "default"):
@@ -417,7 +457,13 @@ def get_stats(site_id: str = "default"):
     # Get last 30 days of history
     cursor.execute("SELECT * FROM daily_stats ORDER BY date DESC LIMIT 30")
     history = [dict(row) for row in cursor.fetchall()]
-    
+
+    # Per-page country breakdown
+    cursor.execute("SELECT page_path, country_code, view_count FROM page_country_stats ORDER BY page_path, view_count DESC")
+    page_countries: dict = {}
+    for r in cursor.fetchall():
+        page_countries.setdefault(r["page_path"], {})[r["country_code"]] = r["view_count"]
+
     conn.close()
     
     return {
@@ -430,7 +476,8 @@ def get_stats(site_id: str = "default"):
         "browsers": browsers,
         "os": os_stats,
         "referrers": referrers,
-        "links": links
+        "links": links,
+        "page_countries": page_countries,
     }
 
 @router.get("/forecast", dependencies=[Depends(verify_signature)])
