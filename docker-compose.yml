@@ -5,6 +5,8 @@ services:
     build: .
     ports:
       - "8011:8011"
+    environment:
+      - ALLOWED_ORIGINS=https://followthecredits.com,https://www.followthecredits.com
     volumes:
       - .:/app
     restart: unless-stopped
