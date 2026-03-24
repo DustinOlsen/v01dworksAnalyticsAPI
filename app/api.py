@@ -263,115 +263,193 @@ def track_visit(request: Request, data: Optional[VisitData] = None):
 
     user_agent = request.headers.get("user-agent", "")
     ua_info = parse_user_agent_info(user_agent)
+    bot_type = ua_info["bot_type"]
+    ua_score = ua_info["ua_score"]
 
     referrer = request.headers.get("referer")
     referrer_category = parse_referrer_category(referrer)
 
-    ua_score = 1.0 if (ua_info["device"] == "Bot" or ua_info["browser"] == "Unknown") else 0.0
+    is_unique_ever = False
+    is_unique_today = False
+    today = datetime.utcnow().strftime("%Y-%m-%d")
 
     conn = get_db(site_id)
     cursor = conn.cursor()
     try:
-        # Update visitor activity for bot detection
+        # Query existing activity once — used for carry-forward and behavioral checks
+        cursor.execute(
+            "SELECT request_count, first_seen, last_seen, bot_type FROM visitor_activity WHERE ip_hash = ?",
+            (hashed_ip,),
+        )
+        existing_activity = cursor.fetchone()
+
+        # Carry forward existing bot flag (once flagged, always flagged)
+        if existing_activity:
+            prev_bot_type = existing_activity["bot_type"] or "none"
+            if prev_bot_type != "none" and bot_type == "none":
+                bot_type = prev_bot_type
+                ua_score = 1.0 if bot_type == "bot" else 0.5
+
+        # Behavioral rate check — only for visitors not yet flagged
+        behavioral_flag = False
+        if bot_type == "none" and existing_activity:
+            try:
+                existing_count = existing_activity["request_count"]
+                first_seen_dt = datetime.fromisoformat(existing_activity["first_seen"])
+                last_seen_dt = datetime.fromisoformat(existing_activity["last_seen"])
+                duration_seconds = max(1.0, (last_seen_dt - first_seen_dt).total_seconds())
+                rate_per_hour = (existing_count / duration_seconds) * 3600
+                if existing_count >= 50 and rate_per_hour > 60:
+                    bot_type = "bot"
+                    ua_score = 1.0
+                    behavioral_flag = True
+            except Exception:
+                pass
+
+        # Only log a bot on first detection per IP
+        prev_bot_type = (existing_activity["bot_type"] or "none") if existing_activity else "none"
+        should_log_bot = bot_type != "none" and prev_bot_type == "none"
+
+        # Update visitor_activity for all visitors (needed for rate tracking)
         cursor.execute("""
-            INSERT INTO visitor_activity (ip_hash, request_count, ua_score)
-            VALUES (?, 1, ?)
+            INSERT INTO visitor_activity (ip_hash, request_count, ua_score, bot_type)
+            VALUES (?, 1, ?, ?)
             ON CONFLICT(ip_hash)
             DO UPDATE SET
                 last_seen = CURRENT_TIMESTAMP,
                 request_count = request_count + 1,
-                ua_score = ?
-        """, (hashed_ip, ua_score, ua_score))
+                ua_score = excluded.ua_score,
+                bot_type = CASE
+                    WHEN visitor_activity.bot_type = 'bot' THEN 'bot'
+                    WHEN excluded.bot_type = 'bot' THEN 'bot'
+                    WHEN visitor_activity.bot_type = 'crawler' THEN 'crawler'
+                    WHEN excluded.bot_type = 'crawler' THEN 'crawler'
+                    ELSE 'none'
+                END
+        """, (hashed_ip, ua_score, bot_type))
 
-        # 1. Total visits counter
-        cursor.execute("UPDATE general_stats SET value = value + 1 WHERE key = 'total_visits'")
+        if bot_type != "none":
+            # ── Bot / Crawler path: separate counters, no human stats touched ──
+            if bot_type == "bot":
+                cursor.execute("""
+                    INSERT INTO bot_daily_stats (date, bot_visits, crawler_visits)
+                    VALUES (?, 1, 0)
+                    ON CONFLICT(date) DO UPDATE SET bot_visits = bot_visits + 1
+                """, (today,))
+                cursor.execute("""
+                    INSERT INTO bot_page_stats (page_path, bot_views, crawler_views)
+                    VALUES (?, 1, 0)
+                    ON CONFLICT(page_path) DO UPDATE SET bot_views = bot_views + 1
+                """, (page_path,))
+            else:  # crawler
+                cursor.execute("""
+                    INSERT INTO bot_daily_stats (date, bot_visits, crawler_visits)
+                    VALUES (?, 0, 1)
+                    ON CONFLICT(date) DO UPDATE SET crawler_visits = crawler_visits + 1
+                """, (today,))
+                cursor.execute("""
+                    INSERT INTO bot_page_stats (page_path, bot_views, crawler_views)
+                    VALUES (?, 0, 1)
+                    ON CONFLICT(page_path) DO UPDATE SET crawler_views = crawler_views + 1
+                """, (page_path,))
 
-        # 2. Unique visitor tracking
-        today = datetime.utcnow().strftime("%Y-%m-%d")
-        cursor.execute("SELECT last_seen FROM unique_visitors WHERE ip_hash = ?", (hashed_ip,))
-        row = cursor.fetchone()
-
-        is_unique_ever = False
-        is_unique_today = False
-
-        if row is None:
-            is_unique_ever = True
-            is_unique_today = True
-            cursor.execute("INSERT INTO unique_visitors (ip_hash) VALUES (?)", (hashed_ip,))
+            if should_log_bot:
+                if behavioral_flag:
+                    reason = "Behavioral: High Request Rate"
+                elif bot_type == "crawler":
+                    reason = "Known Crawler (User-Agent)"
+                else:
+                    reason = "Known Bot Signature (User-Agent)"
+                cursor.execute(
+                    "INSERT INTO bot_logs (ip_hash, reason, bot_type, confidence) VALUES (?, ?, ?, ?)",
+                    (hashed_ip, reason, bot_type, ua_score),
+                )
         else:
-            last_seen_str = row["last_seen"]
-            if not last_seen_str.startswith(today):
+            # ── Human traffic path ──
+            # 1. Total visits counter
+            cursor.execute("UPDATE general_stats SET value = value + 1 WHERE key = 'total_visits'")
+
+            # 2. Unique visitor tracking
+            cursor.execute("SELECT last_seen FROM unique_visitors WHERE ip_hash = ?", (hashed_ip,))
+            uv_row = cursor.fetchone()
+            if uv_row is None:
+                is_unique_ever = True
                 is_unique_today = True
-            cursor.execute(
-                "UPDATE unique_visitors SET last_seen = CURRENT_TIMESTAMP WHERE ip_hash = ?",
-                (hashed_ip,)
-            )
+                cursor.execute("INSERT INTO unique_visitors (ip_hash) VALUES (?)", (hashed_ip,))
+            else:
+                last_seen_str = uv_row["last_seen"]
+                if not last_seen_str.startswith(today):
+                    is_unique_today = True
+                cursor.execute(
+                    "UPDATE unique_visitors SET last_seen = CURRENT_TIMESTAMP WHERE ip_hash = ?",
+                    (hashed_ip,),
+                )
 
-        # 3. Daily stats
-        cursor.execute("""
-            INSERT INTO daily_stats (date, total_visits, unique_visitors)
-            VALUES (?, 1, ?)
-            ON CONFLICT(date)
-            DO UPDATE SET
-                total_visits = total_visits + 1,
-                unique_visitors = unique_visitors + ?
-        """, (today, 1 if is_unique_today else 0, 1 if is_unique_today else 0))
+            # 3. Daily stats
+            cursor.execute("""
+                INSERT INTO daily_stats (date, total_visits, unique_visitors)
+                VALUES (?, 1, ?)
+                ON CONFLICT(date)
+                DO UPDATE SET
+                    total_visits = total_visits + 1,
+                    unique_visitors = unique_visitors + ?
+            """, (today, 1 if is_unique_today else 0, 1 if is_unique_today else 0))
 
-        # 4. Country stats
-        cursor.execute("""
-            INSERT INTO country_stats (country_code, visitor_count)
-            VALUES (?, 1)
-            ON CONFLICT(country_code)
-            DO UPDATE SET visitor_count = visitor_count + 1
-        """, (country,))
+            # 4. Country stats
+            cursor.execute("""
+                INSERT INTO country_stats (country_code, visitor_count)
+                VALUES (?, 1)
+                ON CONFLICT(country_code)
+                DO UPDATE SET visitor_count = visitor_count + 1
+            """, (country,))
 
-        # 5. Page stats
-        cursor.execute("""
-            INSERT INTO page_stats (page_path, view_count)
-            VALUES (?, 1)
-            ON CONFLICT(page_path)
-            DO UPDATE SET view_count = view_count + 1
-        """, (page_path,))
+            # 5. Page stats
+            cursor.execute("""
+                INSERT INTO page_stats (page_path, view_count)
+                VALUES (?, 1)
+                ON CONFLICT(page_path)
+                DO UPDATE SET view_count = view_count + 1
+            """, (page_path,))
 
-        # 6. Device stats
-        cursor.execute("""
-            INSERT INTO device_stats (device_type, count)
-            VALUES (?, 1)
-            ON CONFLICT(device_type)
-            DO UPDATE SET count = count + 1
-        """, (ua_info["device"],))
+            # 6. Device stats
+            cursor.execute("""
+                INSERT INTO device_stats (device_type, count)
+                VALUES (?, 1)
+                ON CONFLICT(device_type)
+                DO UPDATE SET count = count + 1
+            """, (ua_info["device"],))
 
-        # 7. Browser stats
-        cursor.execute("""
-            INSERT INTO browser_stats (browser_family, count)
-            VALUES (?, 1)
-            ON CONFLICT(browser_family)
-            DO UPDATE SET count = count + 1
-        """, (ua_info["browser"],))
+            # 7. Browser stats
+            cursor.execute("""
+                INSERT INTO browser_stats (browser_family, count)
+                VALUES (?, 1)
+                ON CONFLICT(browser_family)
+                DO UPDATE SET count = count + 1
+            """, (ua_info["browser"],))
 
-        # 8. OS stats
-        cursor.execute("""
-            INSERT INTO os_stats (os_family, count)
-            VALUES (?, 1)
-            ON CONFLICT(os_family)
-            DO UPDATE SET count = count + 1
-        """, (ua_info["os"],))
+            # 8. OS stats
+            cursor.execute("""
+                INSERT INTO os_stats (os_family, count)
+                VALUES (?, 1)
+                ON CONFLICT(os_family)
+                DO UPDATE SET count = count + 1
+            """, (ua_info["os"],))
 
-        # 9. Referrer stats
-        cursor.execute("""
-            INSERT INTO referrer_stats (category, count)
-            VALUES (?, 1)
-            ON CONFLICT(category)
-            DO UPDATE SET count = count + 1
-        """, (referrer_category,))
+            # 9. Referrer stats
+            cursor.execute("""
+                INSERT INTO referrer_stats (category, count)
+                VALUES (?, 1)
+                ON CONFLICT(category)
+                DO UPDATE SET count = count + 1
+            """, (referrer_category,))
 
-        # 10. Per-page country stats
-        cursor.execute("""
-            INSERT INTO page_country_stats (page_path, country_code, view_count)
-            VALUES (?, ?, 1)
-            ON CONFLICT(page_path, country_code)
-            DO UPDATE SET view_count = view_count + 1
-        """, (page_path, country))
+            # 10. Per-page country stats
+            cursor.execute("""
+                INSERT INTO page_country_stats (page_path, country_code, view_count)
+                VALUES (?, ?, 1)
+                ON CONFLICT(page_path, country_code)
+                DO UPDATE SET view_count = view_count + 1
+            """, (page_path, country))
 
         conn.commit()
     finally:
@@ -385,6 +463,7 @@ def track_visit(request: Request, data: Optional[VisitData] = None):
         "page": page_path,
         "ua_info": ua_info,
         "referrer": referrer_category,
+        "bot_type": bot_type,
     }
 
 @router.get("/page-stats", dependencies=[Depends(verify_signature)])
@@ -464,6 +543,21 @@ def get_stats(site_id: str = "default"):
     for r in cursor.fetchall():
         page_countries.setdefault(r["page_path"], {})[r["country_code"]] = r["view_count"]
 
+    # Bot summary
+    today_str = datetime.utcnow().strftime("%Y-%m-%d")
+    cursor.execute("SELECT SUM(bot_visits) AS bv, SUM(crawler_visits) AS cv FROM bot_daily_stats")
+    _bt = cursor.fetchone()
+    cursor.execute(
+        "SELECT bot_visits, crawler_visits FROM bot_daily_stats WHERE date = ?", (today_str,)
+    )
+    _bd = cursor.fetchone()
+    bot_summary = {
+        "total_bot_visits": (_bt["bv"] or 0) if _bt else 0,
+        "total_crawler_visits": (_bt["cv"] or 0) if _bt else 0,
+        "bots_today": _bd["bot_visits"] if _bd else 0,
+        "crawlers_today": _bd["crawler_visits"] if _bd else 0,
+    }
+
     conn.close()
     
     return {
@@ -478,6 +572,7 @@ def get_stats(site_id: str = "default"):
         "referrers": referrers,
         "links": links,
         "page_countries": page_countries,
+        "bot_summary": bot_summary,
     }
 
 @router.get("/forecast", dependencies=[Depends(verify_signature)])
@@ -494,4 +589,86 @@ def get_anomalies(site_id: str = "default"):
 
 @router.get("/bots", dependencies=[Depends(verify_signature)])
 def get_bots(site_id: str = "default"):
-    return detect_bots(site_id)
+    ml_result = detect_bots(site_id)
+
+    conn = get_db(site_id)
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "SELECT date, bot_visits, crawler_visits FROM bot_daily_stats ORDER BY date DESC LIMIT 30"
+        )
+        bot_daily_trend = [dict(row) for row in cursor.fetchall()]
+
+        cursor.execute("""
+            SELECT page_path, bot_views, crawler_views, (bot_views + crawler_views) AS total
+            FROM bot_page_stats
+            ORDER BY total DESC
+            LIMIT 10
+        """)
+        top_bot_pages = [dict(row) for row in cursor.fetchall()]
+
+        cursor.execute("SELECT bot_type, COUNT(*) AS count FROM bot_logs GROUP BY bot_type")
+        bot_type_breakdown = {row["bot_type"]: row["count"] for row in cursor.fetchall()}
+
+        cursor.execute("""
+            SELECT ip_hash, detected_at, reason, bot_type, confidence
+            FROM bot_logs
+            ORDER BY detected_at DESC
+            LIMIT 20
+        """)
+        recent_bot_logs = [dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+    return {
+        **ml_result,
+        "bot_daily_trend": bot_daily_trend,
+        "top_bot_pages": top_bot_pages,
+        "bot_type_breakdown": bot_type_breakdown,
+        "recent_bot_logs": recent_bot_logs,
+    }
+
+
+@router.get("/bot-stats", dependencies=[Depends(verify_signature)])
+def get_bot_stats(site_id: str = "default"):
+    conn = get_db(site_id)
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "SELECT date, bot_visits, crawler_visits FROM bot_daily_stats ORDER BY date DESC"
+        )
+        daily = [dict(row) for row in cursor.fetchall()]
+
+        cursor.execute("""
+            SELECT page_path, bot_views, crawler_views
+            FROM bot_page_stats
+            ORDER BY (bot_views + crawler_views) DESC
+        """)
+        pages = [dict(row) for row in cursor.fetchall()]
+
+        cursor.execute("SELECT bot_type, COUNT(*) AS count FROM bot_logs GROUP BY bot_type")
+        type_breakdown = {row["bot_type"]: row["count"] for row in cursor.fetchall()}
+
+        cursor.execute("""
+            SELECT ip_hash, detected_at, reason, bot_type, confidence
+            FROM bot_logs
+            ORDER BY detected_at DESC
+            LIMIT 50
+        """)
+        recent_logs = [dict(row) for row in cursor.fetchall()]
+
+        total_bot_visits = sum(r["bot_visits"] for r in daily)
+        total_crawler_visits = sum(r["crawler_visits"] for r in daily)
+    finally:
+        conn.close()
+
+    return {
+        "summary": {
+            "total_bot_visits": total_bot_visits,
+            "total_crawler_visits": total_crawler_visits,
+        },
+        "daily": daily,
+        "pages": pages,
+        "type_breakdown": type_breakdown,
+        "recent_logs": recent_logs,
+    }

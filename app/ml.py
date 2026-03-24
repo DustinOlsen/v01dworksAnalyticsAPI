@@ -203,19 +203,31 @@ def detect_bots(site_id: str):
             reason.append("High Request Volume")
         if row['request_rate'] > df['request_rate'].mean() * 2:
             reason.append("Abnormal Request Rate")
-        if row['ua_score'] > 0.8: # Assuming 1.0 is very rare/suspicious
+        if row['ua_score'] > 0.8:
             reason.append("Suspicious User Agent")
-            
+
         if not reason:
             reason.append("Unusual Pattern")
-            
+
+        # Determine whether this was flagged at track time or only by ML
+        if 'bot_type' in df.columns:
+            raw_bt = row['bot_type']
+            tracked_bot_type = raw_bt if (isinstance(raw_bt, str) and raw_bt in ('bot', 'crawler')) else 'none'
+        else:
+            tracked_bot_type = 'none'
+
+        flagged_at_track_time = tracked_bot_type in ('bot', 'crawler')
+        detected_type = tracked_bot_type if flagged_at_track_time else "ml_suspected"
+
         results.append({
             "ip_hash": row['ip_hash'],
             "request_count": int(row['request_count']),
-            "reason": ", ".join(reason)
+            "reason": ", ".join(reason),
+            "flagged_at_track_time": flagged_at_track_time,
+            "detected_type": detected_type,
         })
-        
+
     return {
         "detected_bots_count": len(results),
-        "bots": results
+        "bots": results,
     }

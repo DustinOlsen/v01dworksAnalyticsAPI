@@ -136,6 +136,21 @@ def init_db(site_id: str = "default"):
             PRIMARY KEY (page_path, country_code)
         )
     """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS bot_daily_stats (
+            date TEXT PRIMARY KEY,
+            bot_visits INTEGER DEFAULT 0,
+            crawler_visits INTEGER DEFAULT 0
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS bot_page_stats (
+            page_path TEXT PRIMARY KEY,
+            bot_views INTEGER DEFAULT 0,
+            crawler_views INTEGER DEFAULT 0
+        )
+    """)
+
     # Initialize total visits if not exists
     cursor.execute("INSERT OR IGNORE INTO general_stats (key, value) VALUES ('total_visits', 0)")
 
@@ -149,6 +164,8 @@ def init_db(site_id: str = "default"):
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_link_count ON link_stats(click_count DESC)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_activity_requests ON visitor_activity(request_count DESC)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_page_country ON page_country_stats(page_path, view_count DESC)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_bot_daily ON bot_daily_stats(date DESC)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_bot_page ON bot_page_stats(page_path)")
 
     # ── Schema migrations ────────────────────────────────────────────────────
     # Add created_at to auth_config if it doesn't exist yet (idempotent)
@@ -171,6 +188,43 @@ def init_db(site_id: str = "default"):
             )
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_page_country ON page_country_stats(page_path, view_count DESC)")
+    except Exception:
+        pass
+
+    # Add bot_type to visitor_activity for existing DBs
+    try:
+        cursor.execute("ALTER TABLE visitor_activity ADD COLUMN bot_type TEXT DEFAULT 'none'")
+    except Exception:
+        pass
+
+    # Add bot_type to bot_logs for existing DBs
+    try:
+        cursor.execute("ALTER TABLE bot_logs ADD COLUMN bot_type TEXT DEFAULT 'bot'")
+    except Exception:
+        pass
+
+    # Add bot tracking tables for existing DBs
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS bot_daily_stats (
+                date TEXT PRIMARY KEY,
+                bot_visits INTEGER DEFAULT 0,
+                crawler_visits INTEGER DEFAULT 0
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_bot_daily ON bot_daily_stats(date DESC)")
+    except Exception:
+        pass
+
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS bot_page_stats (
+                page_path TEXT PRIMARY KEY,
+                bot_views INTEGER DEFAULT 0,
+                crawler_views INTEGER DEFAULT 0
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_bot_page ON bot_page_stats(page_path)")
     except Exception:
         pass
 

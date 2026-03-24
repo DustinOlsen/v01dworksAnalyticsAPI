@@ -1,5 +1,6 @@
 import hashlib
 import os
+import re
 from pathlib import Path
 from urllib.parse import urlparse
 import geoip2.database
@@ -49,41 +50,81 @@ def get_country_from_ip(ip_address: str) -> str:
     except (FileNotFoundError, Exception):
         return "Unknown"
 
-def parse_user_agent_info(ua_string: str):
+# Legitimate search engine / social-media crawlers
+_CRAWLER_RE = re.compile(
+    r"Googlebot|Bingbot|Slurp|DuckDuckBot|Baiduspider|YandexBot|Applebot|"
+    r"facebookexternalhit|Twitterbot|LinkedInBot|AdsBot-Google|Mediapartners-Google|"
+    r"PetalBot|Pinterest|Listing-Bot",
+    re.IGNORECASE,
+)
+
+# Scrapers, headless browsers, and automation tools
+_BOT_SIGNATURE_RE = re.compile(
+    r"HeadlessChrome|PhantomJS|Selenium|Puppeteer|wkhtmlto|"
+    r"Python-urllib|python-requests|python-httpx|"
+    r"Go-http-client|Java/|libwww|"
+    r"curl/|Wget/|"
+    r"AhrefsBot|SemrushBot|MJ12bot|DotBot|rogerbot|SiteAuditBot|"
+    r"BLEXBot|DataForSeoBot|masscan|zgrab|nuclei",
+    re.IGNORECASE,
+)
+
+
+def parse_user_agent_info(ua_string: str) -> dict:
     """
-    Parses User-Agent string to extract Device, Browser, and OS info.
+    Parses a User-Agent string and returns device, browser, OS, bot_type, and ua_score.
+    bot_type: "none" (human), "crawler" (legit search engine), "bot" (scraper/headless)
+    ua_score:  0.0 (human),   0.5 (crawler),                   1.0 (bot)
     """
-    if not ua_string:
+    if not ua_string or not ua_string.strip():
         return {
-            "device": "Unknown",
+            "device": "Bot",
             "browser": "Unknown",
-            "os": "Unknown"
+            "os": "Unknown",
+            "bot_type": "bot",
+            "ua_score": 1.0,
         }
-        
+
+    # 1. Known legitimate crawlers (checked before the UA library to avoid
+    #    false-negatives where the library doesn't recognise the crawler)
+    if _CRAWLER_RE.search(ua_string):
+        user_agent = parse(ua_string)
+        return {
+            "device": "Crawler",
+            "browser": user_agent.browser.family,
+            "os": user_agent.os.family,
+            "bot_type": "crawler",
+            "ua_score": 0.5,
+        }
+
     user_agent = parse(ua_string)
-    
-    # Device Type
+
+    # 2. Known bot signatures or UA-library bot flag
+    if _BOT_SIGNATURE_RE.search(ua_string) or user_agent.is_bot:
+        return {
+            "device": "Bot",
+            "browser": user_agent.browser.family,
+            "os": user_agent.os.family,
+            "bot_type": "bot",
+            "ua_score": 1.0,
+        }
+
+    # 3. Human visitor
     if user_agent.is_mobile:
         device = "Mobile"
     elif user_agent.is_tablet:
         device = "Tablet"
     elif user_agent.is_pc:
         device = "Desktop"
-    elif user_agent.is_bot:
-        device = "Bot"
     else:
         device = "Other"
-        
-    # Browser Family (e.g., "Chrome", "Firefox", "Mobile Safari")
-    browser = user_agent.browser.family
-    
-    # OS Family (e.g., "Windows", "Mac OS X", "iOS", "Android")
-    os_family = user_agent.os.family
-    
+
     return {
         "device": device,
-        "browser": browser,
-        "os": os_family
+        "browser": user_agent.browser.family,
+        "os": user_agent.os.family,
+        "bot_type": "none",
+        "ua_score": 0.0,
     }
 
 def parse_referrer_category(referrer_url: str) -> str:
