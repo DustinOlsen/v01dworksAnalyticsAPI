@@ -28,7 +28,8 @@
    - [GET /summary 🔒](#10-get-summary-)
    - [GET /anomalies 🔒](#11-get-anomalies-)
    - [GET /bots 🔒](#12-get-bots-)
-   - [GET /debug/auth-status/{site_id}](#13-get-debugauth-statussite_id)
+   - [GET /bot-stats 🔒](#13-get-bot-stats-)
+   - [GET /debug/auth-status/{site_id}](#14-get-debugauth-statussite_id)
 6. [Field Value Reference](#field-value-reference)
 7. [Error Response Reference](#error-response-reference)
 8. [Complete Integration Examples](#complete-integration-examples)
@@ -244,9 +245,12 @@ Content-Type: application/json
   "ua_info": {
     "device": "Desktop",
     "browser": "Chrome",
-    "os": "Mac OS X"
+    "os": "Mac OS X",
+    "bot_type": "none",
+    "ua_score": 0.0
   },
-  "referrer": "Search Engine"
+  "referrer": "Search Engine",
+  "bot_type": "none"
 }
 ```
 
@@ -258,7 +262,12 @@ Content-Type: application/json
 | `ua_info.device` | See [Device Types](#device-types) |
 | `ua_info.browser` | Browser family string (e.g., `"Chrome"`, `"Mobile Safari"`) |
 | `ua_info.os` | OS family string (e.g., `"Windows"`, `"iOS"`, `"Android"`) |
+| `ua_info.bot_type` | `"none"` / `"bot"` / `"crawler"` — classification from UA analysis |
+| `ua_info.ua_score` | `0.0` = human, `0.5` = crawler, `1.0` = bot |
 | `referrer` | See [Referrer Categories](#referrer-categories) |
+| `bot_type` | Top-level copy of `ua_info.bot_type`, also reflects behavioral rate-check upgrades |
+
+> **Bot traffic is tracked separately.** When `bot_type` is `"bot"` or `"crawler"`, the visit is recorded in bot-specific counters (`bot_daily_stats`, `bot_page_stats`, `bot_logs`) and **does not** increment page views, unique visitors, country stats, or any other human analytics table. Use `/bot-stats` or `/bots` to view bot traffic.
 
 **Response `429`** — rate limit exceeded  
 **Response `413`** — body exceeds 64 KB
@@ -354,6 +363,12 @@ GET /stats?site_id=my-media-site
   "page_countries": {
     "/": { "US": 900, "CA": 210 },
     "/articles/my-post": { "US": 420, "GB": 180, "DE": 90 }
+  },
+  "bot_summary": {
+    "total_bot_visits": 312,
+    "total_crawler_visits": 88,
+    "bots_today": 14,
+    "crawlers_today": 3
   }
 }
 ```
@@ -589,7 +604,7 @@ GET /bots?site_id=my-media-site
 
 ---
 
-### 13. GET /debug/auth-status/{site_id}
+### 14. GET /debug/auth-status/{site_id}
 
 Returns whether a public key is registered for the given site.
 
@@ -620,9 +635,11 @@ GET /debug/auth-status/my-media-site
 | `"Desktop"` | Non-mobile PC |
 | `"Mobile"` | Smartphone |
 | `"Tablet"` | Tablet device |
-| `"Bot"` | Identified crawler/bot by user-agent |
-| `"Other"` | Unclassified |
-| `"Unknown"` | Empty or absent User-Agent header |
+| `"Crawler"` | Known legitimate search engine or social-media crawler (Googlebot, Bingbot, etc.) |
+| `"Bot"` | Scraper, headless browser, automation tool, or otherwise suspicious UA |
+| `"Other"` | Unclassified user agent |
+
+Note: Both `"Bot"` and `"Crawler"` visits are routed to separate bot counters and **excluded from human analytics** (page views, unique visitors, daily stats, etc.).
 
 ### Referrer Categories
 

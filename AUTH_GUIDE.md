@@ -3,7 +3,7 @@
 This API supports optional Ed25519 key-based authentication, configured per `site_id`.
 
 - A site with **no registered key** is fully public — anyone can read its stats.
-- Once a public key is registered for a `site_id`, all analytics read endpoints (`/stats`, `/forecast`, `/summary`, `/anomalies`, `/bots`) for that site require a valid signed request.
+- Once a public key is registered for a `site_id`, all analytics read endpoints (`/stats`, `/page-stats`, `/forecast`, `/summary`, `/anomalies`, `/bots`, `/bot-stats`) for that site require a valid signed request.
 - Auth is **not** required for write endpoints (`/track`, `/click`).
 
 ---
