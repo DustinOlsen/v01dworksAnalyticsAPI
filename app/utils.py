@@ -60,7 +60,9 @@ _CRAWLER_RE = re.compile(
 
 # Scrapers, headless browsers, and automation tools
 _BOT_SIGNATURE_RE = re.compile(
-    r"HeadlessChrome|PhantomJS|Selenium|Puppeteer|wkhtmlto|"
+    r"HeadlessChrome|HeadlessFirefox|PhantomJS|"
+    r"Selenium|selenium-stealth|undetected-chromedriver|"
+    r"Playwright|playwright-python|Puppeteer|wkhtmlto|"
     r"Python-urllib|python-requests|python-httpx|"
     r"Go-http-client|Java/|libwww|"
     r"curl/|Wget/|"

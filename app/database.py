@@ -167,6 +167,15 @@ def init_db(site_id: str = "default"):
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_bot_daily ON bot_daily_stats(date DESC)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_bot_page ON bot_page_stats(page_path)")
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS ip_path_counts (
+            ip_hash TEXT NOT NULL,
+            path TEXT NOT NULL,
+            PRIMARY KEY (ip_hash, path)
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_ip_path ON ip_path_counts(ip_hash)")
+
     # ── Schema migrations ────────────────────────────────────────────────────
     # Add created_at to auth_config if it doesn't exist yet (idempotent)
     try:
@@ -225,6 +234,18 @@ def init_db(site_id: str = "default"):
             )
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_bot_page ON bot_page_stats(page_path)")
+    except Exception:
+        pass
+
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS ip_path_counts (
+                ip_hash TEXT NOT NULL,
+                path TEXT NOT NULL,
+                PRIMARY KEY (ip_hash, path)
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_ip_path ON ip_path_counts(ip_hash)")
     except Exception:
         pass
 

@@ -1,4 +1,5 @@
 import os
+import time
 import ipaddress
 from fastapi import APIRouter, Request, Depends, HTTPException, Header, Query
 from fastapi.responses import HTMLResponse
@@ -17,6 +18,15 @@ from .ml import generate_forecast, generate_summary, detect_anomalies, detect_bo
 from .auth import verify_signature
 from .limiter import limiter
 import sqlite3
+
+# ── Rolling-window bot detection ─────────────────────────────────────────────
+# In-memory store: ip_hash -> list of (page_path, unix_timestamp)
+# Resets on server restart; intentional for single-process deployments.
+_path_window: dict = {}
+_PATH_WINDOW_SECONDS = 900        # 15-minute window
+_PATH_WINDOW_THRESHOLD = 20       # distinct paths within the window to flag
+_PATH_WINDOW_MAX_ENTRIES = 200    # cap per IP to prevent memory abuse
+_LIFETIME_PATH_THRESHOLD = 50     # distinct paths lifetime to flag
 
 _DEBUG_ENABLED = os.getenv("ENABLE_DEBUG_ENDPOINTS", "false").lower() == "true"
 
@@ -290,8 +300,43 @@ def track_visit(request: Request, data: Optional[VisitData] = None):
                 bot_type = prev_bot_type
                 ua_score = 1.0 if bot_type == "bot" else 0.5
 
-        # Behavioral rate check — only for visitors not yet flagged
         behavioral_flag = False
+        behavioral_reason = None
+
+        # (1) Rolling window: >20 distinct paths within 15 minutes
+        if bot_type == "none":
+            now = time.time()
+            window = _path_window.get(hashed_ip, [])
+            if len(window) >= _PATH_WINDOW_MAX_ENTRIES:
+                window = window[-_PATH_WINDOW_MAX_ENTRIES:]
+            window.append((page_path, now))
+            cutoff = now - _PATH_WINDOW_SECONDS
+            window = [(p, t) for p, t in window if t >= cutoff]
+            _path_window[hashed_ip] = window
+            if len({p for p, _ in window}) > _PATH_WINDOW_THRESHOLD:
+                bot_type = "bot"
+                ua_score = 1.0
+                behavioral_flag = True
+                behavioral_reason = "Behavioral: High Path Diversity (rolling window)"
+
+        # (2) Lifetime distinct path heuristic: >50 unique paths ever seen
+        if bot_type == "none":
+            cursor.execute(
+                "INSERT OR IGNORE INTO ip_path_counts (ip_hash, path) VALUES (?, ?)",
+                (hashed_ip, page_path),
+            )
+            cursor.execute(
+                "SELECT COUNT(*) AS cnt FROM ip_path_counts WHERE ip_hash = ?",
+                (hashed_ip,),
+            )
+            path_count_row = cursor.fetchone()
+            if path_count_row and path_count_row["cnt"] > _LIFETIME_PATH_THRESHOLD:
+                bot_type = "bot"
+                ua_score = 1.0
+                behavioral_flag = True
+                behavioral_reason = "Behavioral: High Unique Path Count"
+
+        # (3) Behavioral rate check: high lifetime request rate
         if bot_type == "none" and existing_activity:
             try:
                 existing_count = existing_activity["request_count"]
@@ -303,6 +348,7 @@ def track_visit(request: Request, data: Optional[VisitData] = None):
                     bot_type = "bot"
                     ua_score = 1.0
                     behavioral_flag = True
+                    behavioral_reason = "Behavioral: High Request Rate"
             except Exception:
                 pass
 
@@ -355,7 +401,7 @@ def track_visit(request: Request, data: Optional[VisitData] = None):
 
             if should_log_bot:
                 if behavioral_flag:
-                    reason = "Behavioral: High Request Rate"
+                    reason = behavioral_reason
                 elif bot_type == "crawler":
                     reason = "Known Crawler (User-Agent)"
                 else:

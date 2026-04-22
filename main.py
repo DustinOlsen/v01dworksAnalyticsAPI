@@ -6,7 +6,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from slowapi.errors import RateLimitExceeded
 from slowapi import _rate_limit_exceeded_handler
 from app.api import router
-from app.database import init_db
+from app.database import init_db, list_sites, get_db
 from app.limiter import limiter
 
 # ── Request body size limit ──────────────────────────────────────────────────
@@ -45,7 +45,45 @@ app.add_middleware(RequestSizeLimitMiddleware)
 
 @app.on_event("startup")
 def on_startup():
-    init_db("default")
+    sites = list_sites() or ["default"]
+    for site_id in sites:
+        init_db(site_id)
+        _retroactive_flag_high_path_bots(site_id)
+    if "default" not in sites:
+        init_db("default")
+
+
+def _retroactive_flag_high_path_bots(site_id: str):
+    """Flag any IPs in ip_path_counts with >50 distinct paths not yet marked as bots."""
+    conn = get_db(site_id)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            SELECT ipc.ip_hash, COUNT(ipc.path) AS path_count
+            FROM ip_path_counts ipc
+            JOIN visitor_activity va ON va.ip_hash = ipc.ip_hash
+            WHERE va.bot_type != 'bot'
+            GROUP BY ipc.ip_hash
+            HAVING path_count > 50
+        """)
+        rows = cursor.fetchall()
+        for row in rows:
+            ip_hash = row["ip_hash"]
+            cursor.execute(
+                "UPDATE visitor_activity SET bot_type = 'bot', ua_score = 1.0 WHERE ip_hash = ?",
+                (ip_hash,),
+            )
+            cursor.execute("SELECT id FROM bot_logs WHERE ip_hash = ? LIMIT 1", (ip_hash,))
+            if not cursor.fetchone():
+                cursor.execute(
+                    "INSERT INTO bot_logs (ip_hash, reason, bot_type, confidence) VALUES (?, ?, ?, ?)",
+                    (ip_hash, "Behavioral: High Unique Path Count (retroactive)", "bot", 1.0),
+                )
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        conn.close()
 
 @app.get("/")
 def read_root():
