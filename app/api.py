@@ -293,6 +293,13 @@ def track_visit(request: Request, data: Optional[VisitData] = None):
         )
         existing_activity = cursor.fetchone()
 
+        # Pre-read distinct path count (read-only, no write lock acquired yet)
+        cursor.execute(
+            "SELECT COUNT(*) AS cnt FROM ip_path_counts WHERE ip_hash = ?",
+            (hashed_ip,),
+        )
+        prior_path_count = (cursor.fetchone() or {"cnt": 0})["cnt"]
+
         # Carry forward existing bot flag (once flagged, always flagged)
         if existing_activity:
             prev_bot_type = existing_activity["bot_type"] or "none"
@@ -319,22 +326,15 @@ def track_visit(request: Request, data: Optional[VisitData] = None):
                 behavioral_flag = True
                 behavioral_reason = "Behavioral: High Path Diversity (rolling window)"
 
-        # (2) Lifetime distinct path heuristic: >50 unique paths ever seen
-        if bot_type == "none":
-            cursor.execute(
-                "INSERT OR IGNORE INTO ip_path_counts (ip_hash, path) VALUES (?, ?)",
-                (hashed_ip, page_path),
-            )
-            cursor.execute(
-                "SELECT COUNT(*) AS cnt FROM ip_path_counts WHERE ip_hash = ?",
-                (hashed_ip,),
-            )
-            path_count_row = cursor.fetchone()
-            if path_count_row and path_count_row["cnt"] > _LIFETIME_PATH_THRESHOLD:
-                bot_type = "bot"
-                ua_score = 1.0
-                behavioral_flag = True
-                behavioral_reason = "Behavioral: High Unique Path Count"
+        # (2) Lifetime distinct path heuristic: >=50 distinct paths ever seen
+        # Uses the pre-read count (before this request's path is inserted) so no
+        # write lock is acquired here. INSERT happens in the human traffic path below.
+        if bot_type == "none" and prior_path_count >= _LIFETIME_PATH_THRESHOLD:
+            bot_type = "bot"
+            ua_score = 1.0
+            behavioral_flag = True
+            behavioral_reason = "Behavioral: High Unique Path Count"
+
 
         # (3) Behavioral rate check: high lifetime request rate
         if bot_type == "none" and existing_activity:
@@ -456,6 +456,12 @@ def track_visit(request: Request, data: Optional[VisitData] = None):
                 ON CONFLICT(page_path)
                 DO UPDATE SET view_count = view_count + 1
             """, (page_path,))
+
+            # 5a. Track per-IP distinct paths for lifetime heuristic (INSERT only; count read earlier)
+            cursor.execute(
+                "INSERT OR IGNORE INTO ip_path_counts (ip_hash, path) VALUES (?, ?)",
+                (hashed_ip, page_path),
+            )
 
             # 6. Device stats
             cursor.execute("""
