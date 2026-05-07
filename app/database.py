@@ -35,6 +35,8 @@ def get_db(site_id: str = "default") -> sqlite3.Connection:
     db_path = get_db_path(site_id)
     conn = sqlite3.connect(str(db_path), check_same_thread=False)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")   # concurrent reads during writes
+    conn.execute("PRAGMA busy_timeout=5000")  # wait up to 5 s on lock instead of failing
     return conn
 
 def init_db(site_id: str = "default"):
@@ -42,6 +44,8 @@ def init_db(site_id: str = "default"):
     db_path = get_db_path(site_id)
     conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
     cursor = conn.cursor()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS unique_visitors (
