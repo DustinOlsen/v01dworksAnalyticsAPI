@@ -62,7 +62,8 @@ def init_db(site_id: str = "default"):
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS page_stats (
             page_path TEXT PRIMARY KEY,
-            view_count INTEGER DEFAULT 0
+            view_count INTEGER DEFAULT 0,
+            last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
     cursor.execute("""
@@ -253,6 +254,42 @@ def init_db(site_id: str = "default"):
     except Exception:
         pass
 
+    # Add last_seen to page_stats for existing DBs (enables cleanup job)
+    try:
+        cursor.execute(
+            "ALTER TABLE page_stats ADD COLUMN last_seen TIMESTAMP DEFAULT NULL"
+        )
+    except Exception:
+        pass
+
     conn.commit()
     conn.close()
     _initialized_sites.add(site_id)
+
+
+def purge_stale_pages(site_id: str, days: int = 30) -> int:
+    """
+    Deletes page_stats rows that have view_count = 1 and have not been seen
+    in the last `days` days. Returns the number of rows deleted.
+
+    This is a self-healing cleanup for single-hit bot traffic that slipped
+    through detection. Safe to run repeatedly; idempotent.
+    """
+    conn = get_db(site_id)
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            DELETE FROM page_stats
+            WHERE view_count = 1
+              AND (last_seen IS NULL OR last_seen < datetime('now', ? || ' days'))
+            """,
+            (f"-{days}",),
+        )
+        deleted = cursor.rowcount
+        conn.commit()
+        return deleted
+    except Exception:
+        return 0
+    finally:
+        conn.close()

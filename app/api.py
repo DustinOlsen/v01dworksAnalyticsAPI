@@ -12,7 +12,7 @@ import qrcode
 import io
 import base64
 import json
-from .database import get_db, list_sites
+from .database import get_db, list_sites, purge_stale_pages
 from .utils import hash_ip, get_country_from_ip, parse_user_agent_info, parse_referrer_category
 from .ml import generate_forecast, generate_summary, detect_anomalies, detect_bots
 from .auth import verify_signature
@@ -27,6 +27,24 @@ _PATH_WINDOW_SECONDS = 900        # 15-minute window
 _PATH_WINDOW_THRESHOLD = 20       # distinct paths within the window to flag
 _PATH_WINDOW_MAX_ENTRIES = 200    # cap per IP to prevent memory abuse
 _LIFETIME_PATH_THRESHOLD = 50     # distinct paths lifetime to flag
+
+# ── Distributed crawl detection ───────────────────────────────────────────────
+# Tracks timestamps of first-ever IP visits per site to detect coordinated
+# distributed crawls (many new IPs, each hitting only a small number of paths).
+# dict[site_id, list[float]]
+_new_ip_window: dict = {}
+_NEW_IP_WINDOW_SECONDS = 300      # 5-minute window
+_NEW_IP_ALERT_THRESHOLD = int(os.getenv("CRAWL_ALERT_THRESHOLD", "100"))  # new IPs / 5 min
+
+# ── Self-tracking filter ──────────────────────────────────────────────────────
+# Requests originating from the site's own backend proxy carry this header.
+# Tracking them would pollute analytics with server-side fetch noise.
+_PROXY_SOURCE_HEADER = "x-proxy-source"
+_SELF_SOURCE_VALUE = os.getenv("PROXY_SOURCE_VALUE", "followthecredits")
+
+# ── Lazy cleanup tracking ──────────────────────────────────────────────────────
+# Last time purge_stale_pages ran per site_id. Cleanup runs at most once per day.
+_last_cleanup: dict = {}
 
 _DEBUG_ENABLED = os.getenv("ENABLE_DEBUG_ENDPOINTS", "false").lower() == "true"
 
@@ -264,6 +282,10 @@ def track_click(request: Request, data: ClickData):
 @router.post("/track")
 @limiter.limit("60/minute")
 def track_visit(request: Request, data: Optional[VisitData] = None):
+    # Filter self-tracking: requests from the site's own backend proxy are skipped
+    if request.headers.get(_PROXY_SOURCE_HEADER, "").strip().lower() == _SELF_SOURCE_VALUE:
+        return {"status": "ok", "skipped": True}
+
     client_ip = _get_client_ip(request)
 
     hashed_ip = hash_ip(client_ip)
@@ -309,6 +331,22 @@ def track_visit(request: Request, data: Optional[VisitData] = None):
 
         behavioral_flag = False
         behavioral_reason = None
+
+        # (0) Distributed crawl detection — for brand-new IPs only
+        # Track the rate of new unique IPs per site. If it exceeds the threshold
+        # within a 5-minute window, flag this new IP as part of a distributed crawl.
+        if bot_type == "none" and existing_activity is None:
+            now = time.time()
+            site_window = _new_ip_window.get(site_id, [])
+            site_window.append(now)
+            cutoff = now - _NEW_IP_WINDOW_SECONDS
+            site_window = [t for t in site_window if t >= cutoff]
+            _new_ip_window[site_id] = site_window
+            if len(site_window) > _NEW_IP_ALERT_THRESHOLD:
+                bot_type = "bot"
+                ua_score = 1.0
+                behavioral_flag = True
+                behavioral_reason = "Behavioral: Distributed Crawl Pattern"
 
         # (1) Rolling window: >20 distinct paths within 15 minutes
         if bot_type == "none":
@@ -458,10 +496,12 @@ def track_visit(request: Request, data: Optional[VisitData] = None):
 
             # 5. Page stats
             cursor.execute("""
-                INSERT INTO page_stats (page_path, view_count)
-                VALUES (?, 1)
+                INSERT INTO page_stats (page_path, view_count, last_seen)
+                VALUES (?, 1, CURRENT_TIMESTAMP)
                 ON CONFLICT(page_path)
-                DO UPDATE SET view_count = view_count + 1
+                DO UPDATE SET
+                    view_count = view_count + 1,
+                    last_seen = CURRENT_TIMESTAMP
             """, (page_path,))
 
             # 5a. Track per-IP distinct paths for lifetime heuristic (INSERT only; count read earlier)
@@ -513,6 +553,13 @@ def track_visit(request: Request, data: Optional[VisitData] = None):
         conn.commit()
     finally:
         conn.close()
+
+    # Lazy daily cleanup: purge single-view stale pages at most once per day per site
+    _CLEANUP_INTERVAL = 86400  # 24 hours
+    now_ts = time.time()
+    if now_ts - _last_cleanup.get(site_id, 0) > _CLEANUP_INTERVAL:
+        _last_cleanup[site_id] = now_ts
+        purge_stale_pages(site_id, days=30)
 
     return {
         "status": "ok",

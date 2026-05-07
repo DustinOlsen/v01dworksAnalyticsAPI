@@ -265,7 +265,7 @@ Content-Type: application/json
 | `ua_info.bot_type` | `"none"` / `"bot"` / `"crawler"` — classification from UA analysis |
 | `ua_info.ua_score` | `0.0` = human, `0.5` = crawler, `1.0` = bot |
 | `referrer` | See [Referrer Categories](#referrer-categories) |
-| `bot_type` | Top-level copy of `ua_info.bot_type`, also reflects behavioral rate-check upgrades |
+| `bot_type` | Top-level copy of `ua_info.bot_type`, also reflects behavioral upgrades: high request rate, >20 distinct paths in a 15-minute rolling window, or >50 distinct lifetime paths |
 
 > **Bot traffic is tracked separately.** When `bot_type` is `"bot"` or `"crawler"`, the visit is recorded in bot-specific counters (`bot_daily_stats`, `bot_page_stats`, `bot_logs`) and **does not** increment page views, unique visitors, country stats, or any other human analytics table. Use `/bot-stats` or `/bots` to view bot traffic.
 
@@ -636,7 +636,7 @@ GET /debug/auth-status/my-media-site
 | `"Mobile"` | Smartphone |
 | `"Tablet"` | Tablet device |
 | `"Crawler"` | Known legitimate search engine or social-media crawler (Googlebot, Bingbot, etc.) |
-| `"Bot"` | Scraper, headless browser, automation tool, or otherwise suspicious UA |
+| `"Bot"` | Scraper, headless browser (HeadlessChrome, HeadlessFirefox, Playwright, selenium-stealth, undetected-chromedriver, etc.), automation tool, or visitor flagged by behavioral heuristics (high request rate, rolling-window path diversity, or lifetime distinct-path count) |
 | `"Other"` | Unclassified user agent |
 
 Note: Both `"Bot"` and `"Crawler"` visits are routed to separate bot counters and **excluded from human analytics** (page views, unique visitors, daily stats, etc.).
