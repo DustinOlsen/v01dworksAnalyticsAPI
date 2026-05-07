@@ -356,8 +356,15 @@ def track_visit(request: Request, data: Optional[VisitData] = None):
         prev_bot_type = (existing_activity["bot_type"] or "none") if existing_activity else "none"
         should_log_bot = bot_type != "none" and prev_bot_type == "none"
 
+        # For already-known bots (carry-forward, no new behavioral flag), skip the
+        # visitor_activity upsert. It's the highest-frequency write and the data
+        # (request_count, last_seen) is not needed once a bot is flagged. Bot volume
+        # stats (bot_daily_stats, bot_page_stats) are still updated below.
+        skip_activity_upsert = bot_type != "none" and prev_bot_type != "none" and not behavioral_flag
+
         # Update visitor_activity for all visitors (needed for rate tracking)
-        cursor.execute("""
+        if not skip_activity_upsert:
+            cursor.execute("""
             INSERT INTO visitor_activity (ip_hash, request_count, ua_score, bot_type)
             VALUES (?, 1, ?, ?)
             ON CONFLICT(ip_hash)
@@ -555,63 +562,63 @@ def get_stats(site_id: str = "default"):
     conn = get_db(site_id)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    
-    cursor.execute("SELECT value FROM general_stats WHERE key = 'total_visits'")
-    row = cursor.fetchone()
-    total_visits = row["value"] if row else 0
-    
-    cursor.execute("SELECT COUNT(*) as count FROM unique_visitors")
-    row = cursor.fetchone()
-    unique_visitors = row["count"] if row else 0
-    
-    cursor.execute("SELECT * FROM country_stats ORDER BY visitor_count DESC")
-    countries = {row["country_code"]: row["visitor_count"] for row in cursor.fetchall()}
+    try:
+        cursor.execute("SELECT value FROM general_stats WHERE key = 'total_visits'")
+        row = cursor.fetchone()
+        total_visits = row["value"] if row else 0
 
-    cursor.execute("SELECT * FROM page_stats ORDER BY view_count DESC")
-    pages = {row["page_path"]: row["view_count"] for row in cursor.fetchall()}
-    
-    cursor.execute("SELECT * FROM device_stats ORDER BY count DESC")
-    devices = {row["device_type"]: row["count"] for row in cursor.fetchall()}
+        cursor.execute("SELECT COUNT(*) as count FROM unique_visitors")
+        row = cursor.fetchone()
+        unique_visitors = row["count"] if row else 0
 
-    cursor.execute("SELECT * FROM browser_stats ORDER BY count DESC")
-    browsers = {row["browser_family"]: row["count"] for row in cursor.fetchall()}
+        cursor.execute("SELECT * FROM country_stats ORDER BY visitor_count DESC")
+        countries = {row["country_code"]: row["visitor_count"] for row in cursor.fetchall()}
 
-    cursor.execute("SELECT * FROM os_stats ORDER BY count DESC")
-    os_stats = {row["os_family"]: row["count"] for row in cursor.fetchall()}
-    
-    cursor.execute("SELECT * FROM referrer_stats ORDER BY count DESC")
-    referrers = {row["category"]: row["count"] for row in cursor.fetchall()}
-    
-    cursor.execute("SELECT * FROM link_stats ORDER BY click_count DESC")
-    links = {row["link_url"]: row["click_count"] for row in cursor.fetchall()}
-    
-    # Get last 30 days of history
-    cursor.execute("SELECT * FROM daily_stats ORDER BY date DESC LIMIT 30")
-    history = [dict(row) for row in cursor.fetchall()]
+        cursor.execute("SELECT * FROM page_stats ORDER BY view_count DESC")
+        pages = {row["page_path"]: row["view_count"] for row in cursor.fetchall()}
 
-    # Per-page country breakdown
-    cursor.execute("SELECT page_path, country_code, view_count FROM page_country_stats ORDER BY page_path, view_count DESC")
-    page_countries: dict = {}
-    for r in cursor.fetchall():
-        page_countries.setdefault(r["page_path"], {})[r["country_code"]] = r["view_count"]
+        cursor.execute("SELECT * FROM device_stats ORDER BY count DESC")
+        devices = {row["device_type"]: row["count"] for row in cursor.fetchall()}
 
-    # Bot summary
-    today_str = datetime.utcnow().strftime("%Y-%m-%d")
-    cursor.execute("SELECT SUM(bot_visits) AS bv, SUM(crawler_visits) AS cv FROM bot_daily_stats")
-    _bt = cursor.fetchone()
-    cursor.execute(
-        "SELECT bot_visits, crawler_visits FROM bot_daily_stats WHERE date = ?", (today_str,)
-    )
-    _bd = cursor.fetchone()
-    bot_summary = {
-        "total_bot_visits": (_bt["bv"] or 0) if _bt else 0,
-        "total_crawler_visits": (_bt["cv"] or 0) if _bt else 0,
-        "bots_today": _bd["bot_visits"] if _bd else 0,
-        "crawlers_today": _bd["crawler_visits"] if _bd else 0,
-    }
+        cursor.execute("SELECT * FROM browser_stats ORDER BY count DESC")
+        browsers = {row["browser_family"]: row["count"] for row in cursor.fetchall()}
 
-    conn.close()
-    
+        cursor.execute("SELECT * FROM os_stats ORDER BY count DESC")
+        os_stats = {row["os_family"]: row["count"] for row in cursor.fetchall()}
+
+        cursor.execute("SELECT * FROM referrer_stats ORDER BY count DESC")
+        referrers = {row["category"]: row["count"] for row in cursor.fetchall()}
+
+        cursor.execute("SELECT * FROM link_stats ORDER BY click_count DESC")
+        links = {row["link_url"]: row["click_count"] for row in cursor.fetchall()}
+
+        # Get last 30 days of history
+        cursor.execute("SELECT * FROM daily_stats ORDER BY date DESC LIMIT 30")
+        history = [dict(row) for row in cursor.fetchall()]
+
+        # Per-page country breakdown
+        cursor.execute("SELECT page_path, country_code, view_count FROM page_country_stats ORDER BY page_path, view_count DESC")
+        page_countries: dict = {}
+        for r in cursor.fetchall():
+            page_countries.setdefault(r["page_path"], {})[r["country_code"]] = r["view_count"]
+
+        # Bot summary
+        today_str = datetime.utcnow().strftime("%Y-%m-%d")
+        cursor.execute("SELECT SUM(bot_visits) AS bv, SUM(crawler_visits) AS cv FROM bot_daily_stats")
+        _bt = cursor.fetchone()
+        cursor.execute(
+            "SELECT bot_visits, crawler_visits FROM bot_daily_stats WHERE date = ?", (today_str,)
+        )
+        _bd = cursor.fetchone()
+        bot_summary = {
+            "total_bot_visits": (_bt["bv"] or 0) if _bt else 0,
+            "total_crawler_visits": (_bt["cv"] or 0) if _bt else 0,
+            "bots_today": _bd["bot_visits"] if _bd else 0,
+            "crawlers_today": _bd["crawler_visits"] if _bd else 0,
+        }
+    finally:
+        conn.close()
+
     return {
         "total_visits": total_visits,
         "unique_visitors": unique_visitors,
